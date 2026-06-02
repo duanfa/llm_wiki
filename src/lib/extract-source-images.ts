@@ -21,6 +21,7 @@ import { getFileName, normalizePath } from "@/lib/path-utils"
 export interface SavedImage {
   index: number
   mimeType: string
+  kind?: "embedded" | "pageScreenshot" | "markdown"
   /** PDF page or PPTX slide number (1-based). DOCX always null. */
   page: number | null
   width: number
@@ -235,6 +236,7 @@ export async function extractAndSaveMarkdownImages(
       images.push({
         index: images.length + 1,
         mimeType: imageMimeType(dest),
+        kind: "markdown",
         page: null,
         width: 0,
         height: 0,
@@ -307,6 +309,9 @@ export function buildImageMarkdownSection(
   for (const key of ordered) {
     lines.push(`### ${key}`, "")
     for (const img of byPage.get(key) ?? []) {
+      if (img.kind === "pageScreenshot") {
+        lines.push("Full-page screenshot for multi-image flow:")
+      }
       // Caption lookup by SHA-256 — same key the caption pipeline
       // uses to dedupe across documents. Falling back to empty alt
       // text if no caption is available for this image (caption

@@ -50,6 +50,10 @@ function appendSavedImageRefsForCaption(content: string, images: SavedImage[]): 
   return `${content}\n\n## Referenced Local Images\n\n${refs.join("\n")}\n`
 }
 
+function shouldAppendSavedImageToSourceContext(img: SavedImage): boolean {
+  return img.kind === "markdown" || img.kind === "pageScreenshot"
+}
+
 function isSavedImagePromptUrl(projectPath: string, sourceSummarySlug: string, url: string): boolean {
   return (
     url.startsWith(`${projectPath}/wiki/media/${sourceSummarySlug}/`) ||
@@ -567,7 +571,10 @@ async function autoIngestImpl(
   // "the curated wiki knowledge".
   let enrichedSourceContent = stripWikiMediaAbsPaths(
     pp,
-    appendSavedImageRefsForCaption(sourceContent, markdownImages),
+    appendSavedImageRefsForCaption(
+      sourceContent,
+      savedImages.filter(shouldAppendSavedImageToSourceContext),
+    ),
   )
   const mmCfg = useWikiStore.getState().multimodalConfig
   const captionLlm = resolveCaptionConfig(mmCfg, llmConfig)

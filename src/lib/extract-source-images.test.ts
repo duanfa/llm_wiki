@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { findLocalMarkdownImageRefs } from "./extract-source-images"
+import { buildImageMarkdownSection, findLocalMarkdownImageRefs } from "./extract-source-images"
 
 describe("findLocalMarkdownImageRefs", () => {
   it("extracts Obsidian and markdown local image references", () => {
@@ -19,5 +19,27 @@ describe("findLocalMarkdownImageRefs", () => {
 ![[draft.txt]]
 `)
     expect(refs).toEqual([])
+  })
+})
+
+describe("buildImageMarkdownSection", () => {
+  it("labels full-page screenshots for multi-image flows", () => {
+    const section = buildImageMarkdownSection([
+      {
+        index: 1,
+        mimeType: "image/png",
+        kind: "pageScreenshot",
+        page: 2,
+        width: 1600,
+        height: 2200,
+        relPath: "media/source/page-2.png",
+        absPath: "/proj/wiki/media/source/page-2.png",
+        sha256: "hash",
+      },
+    ])
+
+    expect(section).toContain("### Page 2")
+    expect(section).toContain("Full-page screenshot for multi-image flow:")
+    expect(section).toContain("![](media/source/page-2.png)")
   })
 })

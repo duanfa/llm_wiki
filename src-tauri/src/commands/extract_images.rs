@@ -50,6 +50,10 @@ impl Default for ExtractOptions {
     }
 }
 
+const PAGE_SCREENSHOT_IMAGE_THRESHOLD: u32 = 3;
+const PAGE_SCREENSHOT_TARGET_WIDTH: i32 = 1600;
+const PAGE_SCREENSHOT_MAX_HEIGHT: i32 = 2400;
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExtractedImage {
@@ -573,6 +577,7 @@ fn build_pptx_media_slide_map(
 pub struct SavedImage {
     pub index: u32,
     pub mime_type: String,
+    pub kind: String,
     pub page: Option<u32>,
     pub width: u32,
     pub height: u32,
@@ -658,7 +663,13 @@ pub fn extract_and_save_pdf_images(
         page_count, options.min_width, options.min_height, options.max_images
     );
 
+    let page_render_config = PdfRenderConfig::new()
+        .set_target_width(PAGE_SCREENSHOT_TARGET_WIDTH)
+        .set_maximum_height(PAGE_SCREENSHOT_MAX_HEIGHT);
+
     'pages: for (page_idx, page) in doc.pages().iter().enumerate() {
+        let page_num = (page_idx + 1) as u32;
+        let mut page_saved_images: u32 = 0;
         for object in page.objects().iter() {
             total_objects += 1;
             let image = match object.as_image_object() {
@@ -713,13 +724,15 @@ pub fn extract_and_save_pdf_images(
             out.push(SavedImage {
                 index: idx,
                 mime_type: "image/png".to_string(),
-                page: Some((page_idx + 1) as u32),
+                kind: "embedded".to_string(),
+                page: Some(page_num),
                 width,
                 height,
                 rel_path,
                 abs_path,
                 sha256,
             });
+            page_saved_images += 1;
 
             if out.len() >= options.max_images {
                 eprintln!(
@@ -728,6 +741,52 @@ pub fn extract_and_save_pdf_images(
                 );
                 break 'pages;
             }
+        }
+        if page_saved_images >= PAGE_SCREENSHOT_IMAGE_THRESHOLD && out.len() < options.max_images {
+            let dyn_img = match page
+                .render_with_config(&page_render_config)
+                .and_then(|bitmap| bitmap.as_image())
+            {
+                Ok(img) => img,
+                Err(e) => {
+                    eprintln!(
+                        "[extract_and_save_pdf_images] page {page_num} full-page render failed: {e}"
+                    );
+                    continue;
+                }
+            };
+            let width = dyn_img.width();
+            let height = dyn_img.height();
+            let mut png_bytes: Vec<u8> = Vec::new();
+            if let Err(e) = dyn_img.write_to(
+                &mut std::io::Cursor::new(&mut png_bytes),
+                image::ImageFormat::Png,
+            ) {
+                eprintln!(
+                    "[extract_and_save_pdf_images] page {page_num} full-page PNG encode failed: {e}"
+                );
+                continue;
+            }
+
+            idx += 1;
+            let file_name = format!("page-{page_num}.png");
+            let (rel_path, abs_path) = save_one_image(&png_bytes, dest_dir, rel_to, &file_name)?;
+            let sha256 = sha256_hex(&png_bytes);
+
+            out.push(SavedImage {
+                index: idx,
+                mime_type: "image/png".to_string(),
+                kind: "pageScreenshot".to_string(),
+                page: Some(page_num),
+                width,
+                height,
+                rel_path,
+                abs_path,
+                sha256,
+            });
+            eprintln!(
+                "[extract_and_save_pdf_images] page {page_num} had {page_saved_images} images; saved full-page screenshot"
+            );
         }
     }
 
@@ -816,6 +875,7 @@ pub fn extract_and_save_office_images(
         out.push(SavedImage {
             index: idx,
             mime_type,
+            kind: "embedded".to_string(),
             page,
             width,
             height,
