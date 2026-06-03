@@ -309,9 +309,6 @@ export function buildImageMarkdownSection(
   for (const key of ordered) {
     lines.push(`### ${key}`, "")
     for (const img of byPage.get(key) ?? []) {
-      if (img.kind === "pageScreenshot") {
-        lines.push("Full-page screenshot for multi-image flow:")
-      }
       // Caption lookup by SHA-256 — same key the caption pipeline
       // uses to dedupe across documents. Falling back to empty alt
       // text if no caption is available for this image (caption
@@ -321,6 +318,14 @@ export function buildImageMarkdownSection(
       // page number anyway.
       const caption = captionsBySha?.get(img.sha256)
       const alt = caption ? sanitize(caption) : ""
+      if (img.kind === "pageScreenshot") {
+        lines.push("Full-page screenshot for multi-image flow:")
+        if (alt) {
+          lines.push("")
+          lines.push(`Graph structure: ${alt}`)
+          lines.push("")
+        }
+      }
       lines.push(`![${alt}](${img.relPath})`)
     }
     lines.push("")

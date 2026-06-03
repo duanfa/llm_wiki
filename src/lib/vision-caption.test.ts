@@ -134,6 +134,11 @@ describe("captionImage", () => {
     // start hallucinating again. Check the load-bearing fragments.
     expect(CAPTION_PROMPT).toMatch(/factually/)
     expect(CAPTION_PROMPT).toMatch(/visible text verbatim/)
+    expect(CAPTION_PROMPT).toMatch(/flowchart, architecture diagram, sequence diagram/)
+    expect(CAPTION_PROMPT).toMatch(/Nodes: key steps\/components\/actors/)
+    expect(CAPTION_PROMPT).toMatch(/Edges: arrow direction/)
+    expect(CAPTION_PROMPT).toMatch(/Branches: conditions/)
+    expect(CAPTION_PROMPT).toMatch(/Inputs\/outputs/)
     expect(CAPTION_PROMPT).toMatch(/Do NOT speculate/)
     expect(CAPTION_PROMPT).toMatch(/no markdown/)
   })
@@ -175,6 +180,8 @@ describe("captionImage", () => {
     expect(promptText).toMatch(/Text after image/)
     expect(promptText).toMatch(/MAY help describe the image/)
     expect(promptText).toMatch(/MAY ALSO be unrelated/)
+    expect(promptText).toMatch(/compact graph-style description/)
+    expect(promptText).toMatch(/Groups\/swimlanes/)
     // The actual context bytes round-trip through the prompt.
     expect(promptText).toContain("Figure 3: Q2 revenue chart")
     // Empty side becomes `(none)` so the structure is uniform.

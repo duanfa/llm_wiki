@@ -24,22 +24,26 @@ describe("findLocalMarkdownImageRefs", () => {
 
 describe("buildImageMarkdownSection", () => {
   it("labels full-page screenshots for multi-image flows", () => {
-    const section = buildImageMarkdownSection([
-      {
-        index: 1,
-        mimeType: "image/png",
-        kind: "pageScreenshot",
-        page: 2,
-        width: 1600,
-        height: 2200,
-        relPath: "media/source/page-2.png",
-        absPath: "/proj/wiki/media/source/page-2.png",
-        sha256: "hash",
-      },
-    ])
+    const section = buildImageMarkdownSection(
+      [
+        {
+          index: 1,
+          mimeType: "image/png",
+          kind: "pageScreenshot",
+          page: 2,
+          width: 1600,
+          height: 2200,
+          relPath: "media/source/page-2.png",
+          absPath: "/proj/wiki/media/source/page-2.png",
+          sha256: "hash",
+        },
+      ],
+      new Map([["hash", "Nodes: A, B. Edges: A -> B."]]),
+    )
 
     expect(section).toContain("### Page 2")
     expect(section).toContain("Full-page screenshot for multi-image flow:")
+    expect(section).toContain("Graph structure: Nodes: A, B. Edges: A -> B.")
     expect(section).toContain("![](media/source/page-2.png)")
   })
 })
