@@ -24,10 +24,10 @@ function App() {
   const [showCreateDialog, setShowCreateDialog] = useState(false)
   const [loading, setLoading] = useState(true)
 
-  // Set up auto-save and clip watcher once on mount
+  // Set up auto-save and, in desktop mode, the local web-clip watcher.
   useEffect(() => {
     setupAutoSave()
-    startClipWatcher()
+    if (!isWebRuntime()) startClipWatcher()
   }, [])
 
   // Dev-only helper for visually testing the update-banner UX.

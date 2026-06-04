@@ -18,7 +18,8 @@ export async function webApi<T>(
 ): Promise<T> {
   const token = import.meta.env.VITE_LLM_WIKI_API_TOKEN as string | undefined
   const headers = new Headers(init.headers)
-  if (!headers.has("Content-Type") && init.body !== undefined) {
+  const isFormData = typeof FormData !== "undefined" && init.body instanceof FormData
+  if (!headers.has("Content-Type") && init.body !== undefined && !isFormData) {
     headers.set("Content-Type", "application/json")
   }
   if (token && !headers.has("Authorization")) {

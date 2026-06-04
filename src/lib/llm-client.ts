@@ -146,7 +146,7 @@ export async function streamChat(
   }
 
   if (!response.ok) {
-    let errorDetail = `HTTP ${response.status}: ${response.statusText}`
+    let errorDetail = `HTTP ${response.status}: ${response.statusText} at ${providerConfig.url}`
     try {
       const body = await response.text()
       if (body) errorDetail += ` — ${body}`
@@ -164,6 +164,16 @@ export async function streamChat(
             `Set Model to your Azure deployment name (not the model SKU), ` +
             `and Endpoint to https://<resource>.openai.azure.com ` +
             `or .../openai/deployments/<deployment-name>.`,
+        ),
+      )
+      return
+    }
+    if (response.status === 404 && config.provider === "custom") {
+      onError(
+        new Error(
+          `${errorDetail} — Custom OpenAI-compatible endpoints usually need a versioned base URL, ` +
+            `for example http://localhost:11434/v1, http://localhost:1234/v1, or the provider's documented /v1-compatible path. ` +
+            `Also check that API mode matches the endpoint wire format.`,
         ),
       )
       return

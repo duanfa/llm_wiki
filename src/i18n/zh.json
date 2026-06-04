@@ -57,6 +57,8 @@
     "namePlaceholder": "my-research-wiki",
     "parentDir": "父目录",
     "parentDirPlaceholder": "/Users/you/projects",
+    "serverProjectDir": "项目目录",
+    "serverProjectDirPlaceholder": "选择后将在服务器数据目录下创建同名项目",
     "template": "模板",
     "cancel": "取消",
     "create": "创建",

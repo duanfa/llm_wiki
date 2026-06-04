@@ -15,7 +15,7 @@
  */
 import { copyFile, createDirectory, fileExists, readFileAsBase64 } from "@/commands/fs"
 import { getFileName, normalizePath } from "@/lib/path-utils"
-import { isWebRuntime } from "@/lib/web-api"
+import { isWebRuntime, jsonBody, webApi } from "@/lib/web-api"
 
 /** Mirrors `commands::extract_images::SavedImage` on the Rust side. */
 export interface SavedImage {
@@ -56,6 +56,18 @@ const MARKDOWN_IMAGE_EXTS = new Set([
 async function invokeTauri<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke } = await import("@tauri-apps/api/core")
   return invoke<T>(command, args)
+}
+
+function isSavedImage(it: unknown): it is SavedImage {
+  if (!it || typeof it !== "object") return false
+  const obj = it as Record<string, unknown>
+  return (
+    typeof obj.index === "number" &&
+    typeof obj.relPath === "string" &&
+    typeof obj.absPath === "string" &&
+    typeof obj.mimeType === "string" &&
+    typeof obj.sha256 === "string"
+  )
 }
 
 function dirname(path: string): string {
@@ -167,13 +179,20 @@ export async function extractAndSaveSourceImages(
   const isPdf = (SUPPORTED_PDF_EXTS as readonly string[]).includes(ext)
   const isOffice = (SUPPORTED_OFFICE_EXTS as readonly string[]).includes(ext)
   if (!isPdf && !isOffice) return []
-  if (isWebRuntime()) return []
 
   const slug = slugOverride ?? fileName.replace(/\.[^.]+$/, "")
   const destDir = `${pp}/wiki/media/${slug}`
   const relTo = `${pp}/wiki`
 
   try {
+    if (isWebRuntime()) {
+      const result = await webApi<{ images: unknown[] }>("/api/v1/fs/extract-images", {
+        method: "POST",
+        body: jsonBody({ sourcePath: sp, destDir, relTo }),
+      })
+      return result.images.filter(isSavedImage)
+    }
+
     const images = await invokeTauri<unknown[]>(
       isPdf ? "extract_and_save_pdf_images_cmd" : "extract_and_save_office_images_cmd",
       { sourcePath: sp, destDir, relTo },
@@ -185,16 +204,7 @@ export async function extractAndSaveSourceImages(
     // the explicit serde attribute on the Rust struct, this filter
     // would drop every item and return `[]` even when extraction
     // wrote images to disk. We had that bug.)
-    return images
-      .filter((it): it is SavedImage => {
-        if (!it || typeof it !== "object") return false
-        const obj = it as Record<string, unknown>
-        return (
-          typeof obj.index === "number" &&
-          typeof obj.relPath === "string" &&
-          typeof obj.absPath === "string"
-        )
-      })
+    return images.filter(isSavedImage)
   } catch (err) {
     console.warn(
       `[ingest:images] extraction failed for "${fileName}":`,

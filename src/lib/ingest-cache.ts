@@ -7,6 +7,8 @@ import { normalizePath, isAbsolutePath } from "@/lib/path-utils"
  * Cache file: .llm-wiki/ingest-cache.json
  */
 
+const CACHE_VERSION = "ingest-cache-v2-image-context"
+
 interface CacheEntry {
   hash: string
   timestamp: number
@@ -19,7 +21,7 @@ interface CacheData {
 
 async function sha256(content: string): Promise<string> {
   const encoder = new TextEncoder()
-  const data = encoder.encode(content)
+  const data = encoder.encode(`${CACHE_VERSION}\n${content}`)
   const hashBuffer = await crypto.subtle.digest("SHA-256", data)
   const hashArray = Array.from(new Uint8Array(hashBuffer))
   return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("")

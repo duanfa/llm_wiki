@@ -10,9 +10,8 @@ import {
   writeFile,
 } from "@/commands/fs"
 import type { WikiProject, FileNode } from "@/types/wiki"
-import { useWikiStore, type LlmConfig } from "@/stores/wiki-store"
+import type { LlmConfig } from "@/stores/wiki-store"
 import { enqueueBatch } from "@/lib/ingest-queue"
-import { hasUsableLlm } from "@/lib/has-usable-llm"
 import { getFileName, getFileStem, getRelativePath, normalizePath } from "@/lib/path-utils"
 import {
   sourceIdentityForPath,
@@ -35,7 +34,6 @@ import {
 import { collectAllFilesIncludingDot } from "@/lib/sources-tree-delete"
 import { isPathAllowedBySourceWatch, normalizeSourceWatchConfig } from "@/lib/source-watch-config"
 import type { SourceWatchConfig } from "@/stores/wiki-store"
-import { isWebRuntime, jsonBody, webApi } from "@/lib/web-api"
 
 export const INGESTABLE_SOURCE_EXTENSIONS = new Set([
   "md",
@@ -122,20 +120,7 @@ export async function enqueueSourceIngest(
   llmConfig: LlmConfig,
   options: { sourceRoot?: string; rootContext?: string } = {},
 ): Promise<string[]> {
-  if (isWebRuntime()) {
-    const paths = sourcePaths.filter(isIngestableSourcePath)
-    if (paths.length === 0) return []
-    const embeddingConfig = useWikiStore.getState().embeddingConfig
-    const result = await webApi<{ results: Array<{ wikiPath: string }> }>(
-      `/api/v1/projects/${encodeURIComponent(project.id)}/ingest`,
-      {
-        method: "POST",
-        body: jsonBody({ paths, llmConfig, embeddingConfig }),
-      },
-    )
-    return result.results.map((item) => item.wikiPath)
-  }
-  if (!hasUsableLlm(llmConfig)) return []
+  void llmConfig
   const files = sourcePaths
     .filter(isIngestableSourcePath)
     .map((sourcePath) => ({
@@ -222,12 +207,10 @@ export async function importSourceFolder(
     preprocessFile(destPath).catch(() => {})
   }
 
-  if (hasUsableLlm(llmConfig)) {
-    await enqueueSourceIngest(project, allowedFiles, llmConfig, {
-      sourceRoot: destDir,
-      rootContext: folderName,
-    })
-  }
+  await enqueueSourceIngest(project, allowedFiles, llmConfig, {
+    sourceRoot: destDir,
+    rootContext: folderName,
+  })
 
   return allowedFiles
 }

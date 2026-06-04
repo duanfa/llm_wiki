@@ -386,12 +386,10 @@ export const useWikiStore = create<WikiState>((set) => ({
   },
 
   multimodalConfig: {
-    // Off by default — captioning is a non-trivial token spend
-    // (one VLM call per extracted image), and silently turning it
-    // on for every user the first time they import a PDF would be
-    // a budget surprise. Users who want it flip the toggle in
-    // Settings → Image captioning.
-    enabled: false,
+    // On by default so image-heavy PDFs/Office docs produce wiki
+    // pages from visual content instead of only sparse extracted text.
+    // Users can still disable this in Settings → Image captioning.
+    enabled: true,
     useMainLlm: true,
     provider: "custom",
     apiKey: "",

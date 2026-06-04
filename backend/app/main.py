@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import io
 import json
 import mimetypes
 import os
@@ -9,6 +10,7 @@ import re
 import shutil
 import time
 import uuid
+import zipfile
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
@@ -19,7 +21,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from .extraction import ExtractionError, extract_text
+from .extraction import ExtractionError, TEXT_EXTENSIONS, extract_text
 from .ingest import ingest_sources
 from .vector import vector_search
 
@@ -73,6 +75,12 @@ class WriteFileRequest(PathRequest):
 class CopyFileRequest(BaseModel):
     source: str
     destination: str
+
+
+class ExtractImagesRequest(BaseModel):
+    sourcePath: str
+    destDir: str
+    relTo: str
 
 
 class ProjectRequest(BaseModel):
@@ -244,12 +252,15 @@ def list_directory_tree(path: Path) -> list[FileNode]:
 def read_text_file(path: Path) -> str:
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"File does not exist: {path}")
-    if path.stat().st_size > MAX_FILE_CONTENT_BYTES:
+    ext = path.suffix.lower()
+    if path.stat().st_size > MAX_FILE_CONTENT_BYTES and ext in TEXT_EXTENSIONS:
         raise HTTPException(status_code=413, detail="File is too large to read through the Web API")
+    if ext not in TEXT_EXTENSIONS:
+        return extract_text(path)
     try:
         return path.read_text(encoding="utf-8")
-    except UnicodeDecodeError as exc:
-        raise HTTPException(status_code=415, detail="File is not UTF-8 text") from exc
+    except UnicodeDecodeError:
+        return extract_text(path)
 
 
 def preprocess_source_file(path: Path) -> str:
@@ -261,6 +272,214 @@ def preprocess_source_file(path: Path) -> str:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to extract text: {exc}") from exc
+
+
+def sha256_hex(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def rel_path_for(path: Path, rel_to: Path) -> str:
+    try:
+        return path.relative_to(rel_to).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def image_mime_from_ext(ext: str) -> str:
+    ext = ext.lower().lstrip(".")
+    if ext == "jpg":
+        ext = "jpeg"
+    if ext in {"png", "jpeg", "gif", "webp", "bmp"}:
+        return f"image/{ext}"
+    if ext in {"tif", "tiff"}:
+        return "image/tiff"
+    if ext == "svg":
+        return "image/svg+xml"
+    return "application/octet-stream"
+
+
+def image_size(data: bytes) -> tuple[int, int]:
+    try:
+        from PIL import Image
+
+        with Image.open(io.BytesIO(data)) as image:
+            return image.width, image.height
+    except Exception:
+        return 0, 0
+
+
+def save_extracted_image(
+    data: bytes,
+    dest_dir: Path,
+    rel_to: Path,
+    file_name: str,
+    index: int,
+    mime_type: str,
+    page: int | None,
+    kind: str = "embedded",
+    width: int = 0,
+    height: int = 0,
+) -> dict[str, Any]:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    target = dest_dir / file_name
+    target.write_bytes(data)
+    return {
+        "index": index,
+        "mimeType": mime_type,
+        "kind": kind,
+        "page": page,
+        "width": width,
+        "height": height,
+        "relPath": rel_path_for(target, rel_to),
+        "absPath": target.as_posix(),
+        "sha256": sha256_hex(data),
+    }
+
+
+def extract_pdf_images_for_web(source: Path, dest_dir: Path, rel_to: Path) -> list[dict[str, Any]]:
+    try:
+        import fitz
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="PDF image extraction requires PyMuPDF") from exc
+
+    images: list[dict[str, Any]] = []
+    max_images = 500
+    min_width = 100
+    min_height = 100
+    screenshot_threshold = 3
+    with fitz.open(source) as doc:
+        for page_index, page in enumerate(doc, start=1):
+            page_saved = 0
+            seen_xrefs: set[int] = set()
+            for item in page.get_images(full=True):
+                xref = int(item[0])
+                if xref in seen_xrefs:
+                    continue
+                seen_xrefs.add(xref)
+                try:
+                    extracted = doc.extract_image(xref)
+                except Exception:
+                    continue
+                data = extracted.get("image")
+                if not isinstance(data, bytes):
+                    continue
+                width = int(extracted.get("width") or 0)
+                height = int(extracted.get("height") or 0)
+                if width < min_width or height < min_height:
+                    continue
+                ext = str(extracted.get("ext") or "png").lower()
+                mime_type = image_mime_from_ext(ext)
+                index = len(images) + 1
+                images.append(
+                    save_extracted_image(
+                        data,
+                        dest_dir,
+                        rel_to,
+                        f"img-{index}.{ext}",
+                        index,
+                        mime_type,
+                        page_index,
+                        width=width,
+                        height=height,
+                    )
+                )
+                page_saved += 1
+                if len(images) >= max_images:
+                    return images
+
+            if page_saved >= screenshot_threshold and len(images) < max_images:
+                pix = page.get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+                data = pix.tobytes("png")
+                index = len(images) + 1
+                images.append(
+                    save_extracted_image(
+                        data,
+                        dest_dir,
+                        rel_to,
+                        f"page-{page_index}.png",
+                        index,
+                        "image/png",
+                        page_index,
+                        kind="pageScreenshot",
+                        width=pix.width,
+                        height=pix.height,
+                    )
+                )
+    return images
+
+
+def pptx_media_slide_map(archive: zipfile.ZipFile) -> dict[str, int]:
+    mapping: dict[str, int] = {}
+    slide_names = sorted(
+        name
+        for name in archive.namelist()
+        if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)
+    )
+    for slide_index, slide_name in enumerate(slide_names, start=1):
+        rels_name = f"ppt/slides/_rels/{Path(slide_name).name}.rels"
+        if rels_name not in archive.namelist():
+            continue
+        rels = archive.read(rels_name).decode("utf-8", errors="replace")
+        rel_by_id = {
+            match.group(1): match.group(2)
+            for match in re.finditer(r'Id="([^"]+)".+?Target="([^"]+)"', rels)
+        }
+        slide_xml = archive.read(slide_name).decode("utf-8", errors="replace")
+        for rid in re.findall(r'r:embed="([^"]+)"', slide_xml):
+            target = rel_by_id.get(rid)
+            if not target:
+                continue
+            media_path = (Path("ppt/slides") / target).as_posix()
+            while "/../" in media_path:
+                media_path = re.sub(r"[^/]+/\.\./", "", media_path, count=1)
+            if media_path.startswith("../"):
+                media_path = f"ppt/{media_path.removeprefix('../')}"
+            mapping[media_path] = slide_index
+    return mapping
+
+
+def extract_office_images_for_web(source: Path, dest_dir: Path, rel_to: Path) -> list[dict[str, Any]]:
+    images: list[dict[str, Any]] = []
+    max_images = 500
+    min_width = 100
+    min_height = 100
+    with zipfile.ZipFile(source) as archive:
+        names = archive.namelist()
+        slide_map = pptx_media_slide_map(archive) if any(name.startswith("ppt/slides/") for name in names) else {}
+        media_names = [
+            name for name in names
+            if (
+                name.startswith("word/media/")
+                or name.startswith("ppt/media/")
+                or name.startswith("xl/media/")
+            )
+        ]
+        for media_name in media_names:
+            ext = Path(media_name).suffix.lower().lstrip(".")
+            mime_type = image_mime_from_ext(ext)
+            if not mime_type.startswith("image/"):
+                continue
+            data = archive.read(media_name)
+            width, height = image_size(data)
+            if width and height and (width < min_width or height < min_height):
+                continue
+            index = len(images) + 1
+            images.append(
+                save_extracted_image(
+                    data,
+                    dest_dir,
+                    rel_to,
+                    f"img-{index}.{ext or 'bin'}",
+                    index,
+                    mime_type,
+                    slide_map.get(media_name),
+                    width=width,
+                    height=height,
+                )
+            )
+            if len(images) >= max_images:
+                break
+    return images
 
 
 def write_text_file(path: Path, contents: str, atomic: bool = False) -> None:
@@ -604,6 +823,21 @@ def fs_base64(request: PathRequest) -> dict[str, str]:
 @app.post(f"{API_PREFIX}/fs/preprocess", dependencies=[Depends(require_auth)])
 def fs_preprocess(request: PathRequest) -> dict[str, str]:
     return {"content": preprocess_source_file(normalize_path(request.path))}
+
+
+@app.post(f"{API_PREFIX}/fs/extract-images", dependencies=[Depends(require_auth)])
+def fs_extract_images(request: ExtractImagesRequest) -> dict[str, Any]:
+    source = normalize_path(request.sourcePath)
+    dest_dir = normalize_path(request.destDir)
+    rel_to = normalize_path(request.relTo)
+    ext = source.suffix.lower()
+    if ext == ".pdf":
+        images = extract_pdf_images_for_web(source, dest_dir, rel_to)
+    elif ext in {".docx", ".pptx"}:
+        images = extract_office_images_for_web(source, dest_dir, rel_to)
+    else:
+        images = []
+    return {"ok": True, "images": images}
 
 
 @app.get(f"{API_PREFIX}/assets/file", dependencies=[Depends(require_auth)])

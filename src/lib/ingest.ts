@@ -54,6 +54,10 @@ function shouldAppendSavedImageToSourceContext(img: SavedImage): boolean {
   return img.kind === "markdown" || img.kind === "pageScreenshot"
 }
 
+function shouldAppendAllSavedImagesToSourceContext(content: string): boolean {
+  return !/!\[[^\]]*]\([^)\s]+\)/.test(content)
+}
+
 function isSavedImagePromptUrl(projectPath: string, sourceSummarySlug: string, url: string): boolean {
   return (
     url.startsWith(`${projectPath}/wiki/media/${sourceSummarySlug}/`) ||
@@ -412,95 +416,6 @@ async function autoIngestImpl(
     tryReadFile(`${pp}/wiki/overview.md`),
   ])
 
-  // ── Cache check: skip re-ingest if source content hasn't changed ──
-  //
-  // Image cascade still runs on cache hits. Reason: a user may have
-  // ingested this source on a previous app version that didn't extract
-  // images yet, or the media dir may have been deleted out from under
-  // us. `extractAndSaveSourceImages` + injection are both idempotent
-  // (deterministic output paths, marker-bracketed replacement), so
-  // re-running them costs only the extraction time and converges the
-  // source-summary page on the current pipeline's contract regardless
-  // of when the file was first ingested.
-  const cachedFiles = await checkIngestCache(pp, sourceIdentity, sourceContent)
-  console.log(`[ingest:diag] cache check for "${sourceIdentity}":`, cachedFiles === null ? "MISS (full pipeline)" : `HIT (${cachedFiles.length} cached files)`)
-  if (cachedFiles !== null) {
-    try {
-      console.log(`[ingest:diag] cache-hit branch: starting image extraction for ${sp}`)
-      let savedImages = await extractAndSaveSourceImages(pp, sp, sourceSummarySlug)
-      const markdownImages = await extractAndSaveMarkdownImages(pp, sp, sourceContent, sourceSummarySlug)
-      savedImages = [...savedImages, ...markdownImages]
-      console.log(`[ingest:diag] cache-hit branch: got ${savedImages.length} image(s)`)
-      if (savedImages.length > 0) {
-        // Caption first (populates the cache), THEN inject — the
-        // safety-net section uses the cache to populate alt text.
-        // Doing them in this order means cache-hit re-runs (e.g.
-        // user re-imports an old PDF after captioning was added)
-        // converge: first run grows the cache, second run uses it.
-        //
-        // Master-toggle gate: when multimodal is OFF the entire
-        // image-cascade is skipped here. This matches the
-        // full-pipeline branch's strip-and-skip behavior for the
-        // cache-hit path, so a user re-importing an old file
-        // after disabling captioning sees images disappear from
-        // the wiki side. (If a previous ingest had already written
-        // a `## Embedded Images` block, it stays — re-import
-        // doesn't proactively scrub old wiki content. The user
-        // would need to delete the wiki/sources/<slug>.md page
-        // to start clean.)
-        const mmCfg = useWikiStore.getState().multimodalConfig
-        if (!mmCfg.enabled) {
-          console.log(
-            `[ingest:caption] cache-hit + disabled — skipping caption + safety-net inject (${savedImages.length} image(s) untouched on disk)`,
-          )
-        } else {
-          const captionLlm = resolveCaptionConfig(mmCfg, llmConfig)
-          if (captionLlm) {
-            try {
-              await captionMarkdownImages(pp, appendSavedImageRefsForCaption(sourceContent, savedImages), captionLlm, {
-                signal,
-                shouldCaption: (url) =>
-                  isSavedImagePromptUrl(pp, sourceSummarySlug, url),
-                urlToAbsPath: (url) => promptImageUrlToAbs(pp, url),
-                concurrency: mmCfg.concurrency,
-                onProgress: (done, total) =>
-                  activity.updateItem(activityId, {
-                    detail: `Captioning images... ${done}/${total}`,
-                  }),
-              })
-            } catch (err) {
-              console.warn(
-                `[ingest:caption] cache-hit caption pass failed:`,
-                err instanceof Error ? err.message : err,
-              )
-            }
-          }
-          await injectImagesIntoSourceSummary(pp, sourceIdentity, sourceSummarySlug, savedImages)
-          // Re-embed the source-summary page so caption text lands
-          // in the search index. Without this step, search by image
-          // content stays empty for files ingested before captioning
-          // was added — the safety-net section was just rewritten
-          // with captions, but the embeddings still reflect the old
-          // empty-alt content.
-          await reembedSourceSummary(pp, sourceIdentity, sourceSummarySlug)
-        }
-      } else {
-        console.log(`[ingest:diag] cache-hit branch: skipping injection (no images returned from extraction)`)
-      }
-    } catch (err) {
-      console.warn(
-        `[ingest:images] cache-hit injection failed for "${fileName}":`,
-        err instanceof Error ? err.message : err,
-      )
-    }
-    activity.updateItem(activityId, {
-      status: "done",
-      detail: `Skipped (unchanged) — ${cachedFiles.length} files from previous ingest`,
-      filesWritten: cachedFiles,
-    })
-    return cachedFiles
-  }
-
   // ── Step 0.5: Extract embedded images ─────────────────────────
   // Pulls every embedded image out of PDF / PPTX / DOCX into
   // `wiki/media/<source-slug>/`. We DON'T inject the markdown
@@ -573,11 +488,14 @@ async function autoIngestImpl(
     pp,
     appendSavedImageRefsForCaption(
       sourceContent,
-      savedImages.filter(shouldAppendSavedImageToSourceContext),
+      shouldAppendAllSavedImagesToSourceContext(sourceContent)
+        ? savedImages
+        : savedImages.filter(shouldAppendSavedImageToSourceContext),
     ),
   )
   const mmCfg = useWikiStore.getState().multimodalConfig
   const captionLlm = resolveCaptionConfig(mmCfg, llmConfig)
+  let imageCaptionsReadyForCache = savedImages.length === 0
   if (!mmCfg.enabled && savedImages.length > 0) {
     // Strip `![alt](url)` references — match the same regex shape
     // we use elsewhere for image refs. Preserve a single space
@@ -613,6 +531,7 @@ async function autoIngestImpl(
           }),
       })
       enrichedSourceContent = stripWikiMediaAbsPaths(pp, result.enrichedMarkdown)
+      imageCaptionsReadyForCache = result.failed === 0
       console.log(
         `[ingest:caption] images=${savedImages.length} fresh=${result.freshCaptions} cached=${result.cachedCaptions} failed=${result.failed}`,
       )
@@ -624,6 +543,32 @@ async function autoIngestImpl(
       // Fall through with original (empty-alt) source content —
       // captioning failure must NEVER break ingest.
     }
+  }
+  if (savedImages.length > 0 && !imageCaptionsReadyForCache) {
+    console.warn(
+      `[ingest:caption] image-rich source "${sourceIdentity}" will not be cached because captions are missing or incomplete`,
+    )
+  }
+
+  // ── Cache check: skip the expensive LLM stages only after image
+  // extraction/captioning has shaped the exact content the generation
+  // model would see. This prevents old text-only web ingests from
+  // masking newly available image captions.
+  const cachedFiles = imageCaptionsReadyForCache
+    ? await checkIngestCache(pp, sourceIdentity, enrichedSourceContent)
+    : null
+  console.log(`[ingest:diag] cache check for "${sourceIdentity}":`, cachedFiles === null ? "MISS (full pipeline)" : `HIT (${cachedFiles.length} cached files)`)
+  if (cachedFiles !== null) {
+    if (mmCfg.enabled && savedImages.length > 0 && !signal?.aborted) {
+      await injectImagesIntoSourceSummary(pp, sourceIdentity, sourceSummarySlug, savedImages)
+      await reembedSourceSummary(pp, sourceIdentity, sourceSummarySlug)
+    }
+    activity.updateItem(activityId, {
+      status: "done",
+      detail: `Skipped (unchanged) — ${cachedFiles.length} files from previous ingest`,
+      filesWritten: cachedFiles,
+    })
+    return cachedFiles
   }
 
   const stableContextLength = schema.length + purpose.length + index.length + overview.length
@@ -890,11 +835,15 @@ async function autoIngestImpl(
   // mismatch, path-traversal rejection, empty-path) are NOT failures
   // — they represent deterministic decisions and caching them is
   // safe.
-  if (writtenPaths.length > 0 && hardFailures.length === 0) {
-    await saveIngestCache(pp, sourceIdentity, sourceContent, writtenPaths)
+  if (writtenPaths.length > 0 && hardFailures.length === 0 && imageCaptionsReadyForCache) {
+    await saveIngestCache(pp, sourceIdentity, enrichedSourceContent, writtenPaths)
     if (longSourceCheckpointPath) {
       await clearLongSourceCheckpoint(longSourceCheckpointPath)
     }
+  } else if (writtenPaths.length > 0 && hardFailures.length === 0 && !imageCaptionsReadyForCache) {
+    console.warn(
+      `[ingest] Skipping cache save for "${sourceIdentity}" — image captions are missing or incomplete`,
+    )
   } else if (hardFailures.length > 0) {
     console.warn(
       `[ingest] Skipping cache save for "${sourceIdentity}" — ${hardFailures.length} block(s) failed to write: ${hardFailures.join(", ")}`,

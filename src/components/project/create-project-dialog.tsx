@@ -17,6 +17,52 @@ import { useWikiStore, type OutputLanguage } from "@/stores/wiki-store"
 import { saveOutputLanguage } from "@/lib/project-store"
 import { isWebRuntime } from "@/lib/web-api"
 
+type DirectoryHandleLike = { name: string }
+
+async function pickWebDirectoryName(): Promise<string | null> {
+  const maybeWindow = window as unknown as {
+    showDirectoryPicker?: () => Promise<DirectoryHandleLike>
+  }
+
+  if (maybeWindow.showDirectoryPicker) {
+    try {
+      const handle = await maybeWindow.showDirectoryPicker()
+      return handle.name || null
+    } catch (err) {
+      if (err instanceof DOMException && err.name === "AbortError") return null
+      throw err
+    }
+  }
+
+  return new Promise((resolve) => {
+    const input = document.createElement("input")
+    input.type = "file"
+    input.multiple = true
+    input.setAttribute("webkitdirectory", "")
+    input.setAttribute("directory", "")
+    input.style.display = "none"
+
+    input.onchange = () => {
+      const first = input.files?.[0] as (File & { webkitRelativePath?: string }) | undefined
+      document.body.removeChild(input)
+      if (!first) {
+        resolve(null)
+        return
+      }
+      const root = first.webkitRelativePath?.split("/")[0]
+      resolve(root || first.name || null)
+    }
+
+    input.oncancel = () => {
+      document.body.removeChild(input)
+      resolve(null)
+    }
+
+    document.body.appendChild(input)
+    input.click()
+  })
+}
+
 interface CreateProjectDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -25,6 +71,7 @@ interface CreateProjectDialogProps {
 
 export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: CreateProjectDialogProps) {
   const { t } = useTranslation()
+  const webRuntime = isWebRuntime()
   const [name, setName] = useState("")
   const [path, setPath] = useState("")
   const [selectedTemplate, setSelectedTemplate] = useState("general")
@@ -39,8 +86,8 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
   const setOutputLanguage = useWikiStore((s) => s.setOutputLanguage)
 
   async function handleBrowse() {
-    const selected = isWebRuntime()
-      ? window.prompt("输入服务端可创建项目的目录路径")
+    const selected = webRuntime
+      ? await pickWebDirectoryName()
       : await import("@tauri-apps/plugin-dialog").then(({ open }) =>
           open({
             directory: true,
@@ -49,7 +96,9 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
           }),
         )
     if (selected) {
-      setPath(Array.isArray(selected) ? selected[0] : selected)
+      const nextPath = Array.isArray(selected) ? selected[0] : selected
+      setPath(nextPath)
+      if (webRuntime && !name.trim()) setName(nextPath)
     }
   }
 
@@ -145,9 +194,15 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
             </p>
           </div>
           <div className="flex flex-col gap-2">
-            <Label htmlFor="path">{t("project.parentDir")}</Label>
+            <Label htmlFor="path">{webRuntime ? t("project.serverProjectDir") : t("project.parentDir")}</Label>
             <div className="flex gap-2">
-              <Input id="path" value={path} onChange={(e) => setPath(e.target.value)} placeholder={t("project.parentDirPlaceholder")} className="flex-1" />
+              <Input
+                id="path"
+                value={path}
+                onChange={(e) => setPath(e.target.value)}
+                placeholder={webRuntime ? t("project.serverProjectDirPlaceholder") : t("project.parentDirPlaceholder")}
+                className="flex-1"
+              />
               <Button variant="outline" size="icon" onClick={handleBrowse} type="button">
                 <FolderOpen className="h-4 w-4" />
               </Button>
