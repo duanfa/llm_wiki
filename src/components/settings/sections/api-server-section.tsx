@@ -9,7 +9,6 @@ import {
   ShieldAlert,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
-import { openUrl } from "@tauri-apps/plugin-opener"
 import { apiServerStatus } from "@/commands/fs"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -18,6 +17,7 @@ import { API_SERVER_BASE_URL, API_SERVER_HEALTH_URL } from "@/lib/api-server-con
 import { generateApiToken } from "@/lib/api-token"
 import { useWikiStore } from "@/stores/wiki-store"
 import type { SettingsDraft, DraftSetter } from "../settings-types"
+import { isWebRuntime } from "@/lib/web-api"
 
 interface Props {
   draft: SettingsDraft
@@ -124,9 +124,15 @@ export function ApiServerSection({ draft, setDraft }: Props) {
   }, [sampleCurl])
 
   const handleOpenHealth = useCallback(() => {
-    void openUrl(API_SERVER_HEALTH_URL).catch((err) => {
-      console.error("[api-settings] open health failed:", err)
-    })
+    if (isWebRuntime()) {
+      window.open(API_SERVER_HEALTH_URL, "_blank", "noopener,noreferrer")
+      return
+    }
+    void import("@tauri-apps/plugin-opener")
+      .then(({ openUrl }) => openUrl(API_SERVER_HEALTH_URL))
+      .catch((err) => {
+        console.error("[api-settings] open health failed:", err)
+      })
   }, [])
 
   const statusLabel = useMemo(() => {

@@ -28,10 +28,18 @@ import { parseFrontmatter } from "@/lib/frontmatter"
 import { FrontmatterPanel } from "@/components/editor/frontmatter-panel"
 import { useWikiStore } from "@/stores/wiki-store"
 import { MermaidDiagram, unwrapMermaidPre } from "@/components/mermaid-diagram"
+import { isWebRuntime, WEB_API_BASE_URL } from "@/lib/web-api"
 
 interface FilePreviewProps {
   filePath: string
   textContent: string
+}
+
+function mediaFileSrc(filePath: string): string {
+  if (isWebRuntime()) {
+    return `${WEB_API_BASE_URL}/api/v1/assets/file?path=${encodeURIComponent(filePath)}`
+  }
+  return convertFileSrc(filePath)
 }
 
 export function FilePreview({ filePath, textContent }: FilePreviewProps) {
@@ -84,7 +92,7 @@ function extractedTextLabel(filePath: string): string {
 }
 
 function ImagePreview({ filePath, fileName }: { filePath: string; fileName: string }) {
-  const src = convertFileSrc(filePath)
+  const src = mediaFileSrc(filePath)
   return (
     <div className="flex h-full flex-col p-6">
       <div className="mb-4 text-xs text-muted-foreground">{filePath}</div>
@@ -100,7 +108,7 @@ function ImagePreview({ filePath, fileName }: { filePath: string; fileName: stri
 }
 
 function VideoPreview({ filePath, fileName }: { filePath: string; fileName: string }) {
-  const src = convertFileSrc(filePath)
+  const src = mediaFileSrc(filePath)
   return (
     <div className="flex h-full flex-col p-6">
       <div className="mb-4 text-xs text-muted-foreground">{filePath}</div>
@@ -118,7 +126,7 @@ function VideoPreview({ filePath, fileName }: { filePath: string; fileName: stri
 }
 
 function AudioPreview({ filePath, fileName }: { filePath: string; fileName: string }) {
-  const src = convertFileSrc(filePath)
+  const src = mediaFileSrc(filePath)
   return (
     <div className="flex h-full flex-col items-center justify-center gap-4 p-6">
       <div className="text-xs text-muted-foreground">{filePath}</div>

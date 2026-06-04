@@ -25,10 +25,18 @@
  * the appropriate `convertFileSrc(...)` URL or the original src
  * verbatim.
  */
-import { convertFileSrc } from "@tauri-apps/api/core"
 import { normalizePath } from "@/lib/path-utils"
+import { isWebRuntime, WEB_API_BASE_URL } from "@/lib/web-api"
+import { convertFileSrc } from "@tauri-apps/api/core"
 
 const PASSTHROUGH_RE = /^(https?:|data:|blob:|file:|tauri:)/i
+
+function fileAssetSrc(path: string): string {
+  if (isWebRuntime()) {
+    return `${WEB_API_BASE_URL}/api/v1/assets/file?path=${encodeURIComponent(path)}`
+  }
+  return convertFileSrc(path)
+}
 
 /**
  * `projectPath` is the wiki project's root directory. When null
@@ -50,7 +58,7 @@ export function resolveMarkdownImageSrc(
 
   // Absolute paths get fed straight to convertFileSrc — the user (or
   // some plugin) explicitly chose that path; we don't second-guess.
-  if (isAbsolute) return convertFileSrc(rawSrc)
+  if (isAbsolute) return fileAssetSrc(rawSrc)
 
   // Strip a leading `./` for cleanliness; treat `media/foo.png` and
   // `./media/foo.png` identically.
@@ -61,5 +69,5 @@ export function resolveMarkdownImageSrc(
   // generated content always use this convention so the path is
   // stable regardless of page depth.
   const absolute = `${pp}/wiki/${cleaned}`
-  return convertFileSrc(absolute)
+  return fileAssetSrc(absolute)
 }

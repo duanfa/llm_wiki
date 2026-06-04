@@ -15,7 +15,6 @@ import {
   Server,
 } from "lucide-react"
 import { useTranslation } from "react-i18next"
-import { invoke } from "@tauri-apps/api/core"
 import i18n from "@/i18n"
 import { Button } from "@/components/ui/button"
 import { useWikiStore } from "@/stores/wiki-store"
@@ -37,6 +36,12 @@ import { ApiServerSection } from "./sections/api-server-section"
 import { ChangelogSection } from "./sections/changelog-section"
 import { MaintenanceSection } from "./sections/maintenance-section"
 import { AboutSection } from "./sections/about-section"
+import { isWebRuntime } from "@/lib/web-api"
+
+async function invokeTauri<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<T>(command, args)
+}
 
 type CategoryId =
   | "llm"
@@ -344,7 +349,7 @@ export function SettingsView() {
     // builds a fresh reqwest client per fetch and reqwest reads
     // env vars at build time, so changing them here is enough.
     try {
-      await invoke<string>("set_proxy_env", { config: newProxy })
+      if (!isWebRuntime()) await invokeTauri<string>("set_proxy_env", { config: newProxy })
     } catch (err) {
       console.warn("[proxy] live update failed; restart will still apply:", err)
     }
@@ -384,7 +389,7 @@ export function SettingsView() {
     setApiConfig(newApiConfig)
     await saveApiConfig(newApiConfig)
     try {
-      await invoke<string>("api_server_reload_config")
+      if (!isWebRuntime()) await invokeTauri<string>("api_server_reload_config")
     } catch (err) {
       console.warn("[api] failed to reload API server config cache:", err)
     }

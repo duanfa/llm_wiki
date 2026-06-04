@@ -1,11 +1,11 @@
 import { useState } from "react"
 import { ChevronRight, ChevronDown, File, Folder, FolderOpen } from "lucide-react"
-import { message } from "@tauri-apps/plugin-dialog"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { useWikiStore } from "@/stores/wiki-store"
 import type { FileNode } from "@/types/wiki"
 import { useTranslation } from "react-i18next"
 import { openProjectFolder } from "@/commands/fs"
+import { isWebRuntime } from "@/lib/web-api"
 
 function TreeNode({ node, depth }: { node: FileNode; depth: number }) {
   const [expanded, setExpanded] = useState(depth < 1)
@@ -66,17 +66,21 @@ export function FileTree() {
       await openProjectFolder(project.path)
     } catch (err) {
       console.error("[FileTree] open project folder failed:", err)
-      await message(
-        t("fileTree.openProjectFolderFailed", {
-          defaultValue: "Failed to open the project folder.",
-        }),
-        {
-          title: t("fileTree.openProjectFolder", {
-            defaultValue: "Open project folder",
+      const text = t("fileTree.openProjectFolderFailed", {
+        defaultValue: "Failed to open the project folder.",
+      })
+      if (isWebRuntime()) {
+        window.alert(text)
+      } else {
+        await import("@tauri-apps/plugin-dialog").then(({ message }) =>
+          message(text, {
+            title: t("fileTree.openProjectFolder", {
+              defaultValue: "Open project folder",
+            }),
+            kind: "error",
           }),
-          kind: "error",
-        },
-      )
+        )
+      }
     }
   }
 

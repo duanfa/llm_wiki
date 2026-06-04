@@ -1,5 +1,4 @@
 import { useState, useEffect } from "react"
-import { open } from "@tauri-apps/plugin-dialog"
 import i18n from "@/i18n"
 import { useWikiStore } from "@/stores/wiki-store"
 import { useReviewStore } from "@/stores/review-store"
@@ -14,6 +13,7 @@ import { AppLayout } from "@/components/layout/app-layout"
 import { WelcomeScreen } from "@/components/project/welcome-screen"
 import { CreateProjectDialog } from "@/components/project/create-project-dialog"
 import type { WikiProject } from "@/types/wiki"
+import { isWebRuntime } from "@/lib/web-api"
 
 function App() {
   const project = useWikiStore((s) => s.project)
@@ -408,14 +408,19 @@ function App() {
   }
 
   async function handleOpenProject() {
-    const selected = await open({
-      directory: true,
-      multiple: false,
-      title: "Open Wiki Project",
-    })
+    const selected = isWebRuntime()
+      ? window.prompt("输入服务端可访问的 Wiki 项目路径")
+      : await import("@tauri-apps/plugin-dialog").then(({ open }) =>
+          open({
+            directory: true,
+            multiple: false,
+            title: "Open Wiki Project",
+          }),
+        )
     if (!selected) return
+    const selectedPath = Array.isArray(selected) ? selected[0] : selected
     try {
-      const proj = await openProject(selected)
+      const proj = await openProject(selectedPath)
       await handleProjectOpened(proj)
     } catch (err) {
       window.alert(`Failed to open project: ${err}`)

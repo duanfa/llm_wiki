@@ -1,6 +1,5 @@
 import { useState, useCallback } from "react"
 import { useTranslation } from "react-i18next"
-import { open } from "@tauri-apps/plugin-dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Button } from "@/components/ui/button"
@@ -8,6 +7,7 @@ import { Folder, Play, RefreshCw } from "lucide-react"
 import type { SettingsDraft, DraftSetter } from "../settings-types"
 import { useWikiStore } from "@/stores/wiki-store"
 import { scanAndImport } from "@/lib/scheduled-import"
+import { isWebRuntime } from "@/lib/web-api"
 
 interface Props {
   draft: SettingsDraft
@@ -21,12 +21,16 @@ export function ScheduledImportSection({ draft, setDraft }: Props) {
   const [isScanning, setIsScanning] = useState(false)
 
   const handleSelectDirectory = async () => {
-    const selected = await open({
-      directory: true,
-      title: t("settings.sections.scheduledImport.selectDirectory", {
-        defaultValue: "Select Directory to Monitor",
-      }),
-    })
+    const selected = isWebRuntime()
+      ? window.prompt("输入服务端可访问的定时导入目录路径")
+      : await import("@tauri-apps/plugin-dialog").then(({ open }) =>
+          open({
+            directory: true,
+            title: t("settings.sections.scheduledImport.selectDirectory", {
+              defaultValue: "Select Directory to Monitor",
+            }),
+          }),
+        )
 
     if (selected && typeof selected === "string") {
       setDraft("scheduledImportPath", selected)

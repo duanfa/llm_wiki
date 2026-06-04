@@ -1,6 +1,6 @@
-import { invoke } from "@tauri-apps/api/core"
 import { normalizePath } from "@/lib/path-utils"
 import { useWikiStore } from "@/stores/wiki-store"
+import { isWebRuntime, jsonBody, webApi } from "@/lib/web-api"
 
 export interface ImageRef {
   url: string
@@ -24,6 +24,22 @@ interface BackendSearchResponse {
   results: SearchResult[]
   tokenHits: number
   vectorHits: number
+}
+
+interface ApiProject {
+  id: string
+  path: string
+}
+
+async function invokeTauri<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<T>(command, args)
+}
+
+async function resolveWebProjectId(projectPath: string): Promise<string> {
+  const response = await webApi<{ projects: ApiProject[] }>("/api/v1/projects")
+  const normalized = normalizePath(projectPath)
+  return response.projects.find((project) => normalizePath(project.path) === normalized)?.id ?? normalized
 }
 
 const STOP_WORDS = new Set([
@@ -66,14 +82,25 @@ export async function searchWiki(
   const pp = normalizePath(projectPath)
   const embCfg = useWikiStore.getState().embeddingConfig
 
-  const response = await invoke<BackendSearchResponse>("search_project", {
-    projectPath: pp,
-    query,
-    topK: 20,
-    includeContent: false,
-    queryEmbedding: null,
-    embeddingConfig: embCfg,
-  })
+  const response = isWebRuntime()
+    ? await webApi<BackendSearchResponse>(`/api/v1/projects/${encodeURIComponent(await resolveWebProjectId(pp))}/search`, {
+        method: "POST",
+        body: jsonBody({
+          query,
+          topK: 20,
+          includeContent: false,
+          queryEmbedding: null,
+          embeddingConfig: embCfg,
+        }),
+      })
+    : await invokeTauri<BackendSearchResponse>("search_project", {
+        projectPath: pp,
+        query,
+        topK: 20,
+        includeContent: false,
+        queryEmbedding: null,
+        embeddingConfig: embCfg,
+      })
 
   return response.results.map((result) => ({
     ...result,

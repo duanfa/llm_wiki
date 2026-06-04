@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+python-multipart
+PyMuPDF
+python-docx
+python-pptx
+openpyxl
+beautifulsoup4

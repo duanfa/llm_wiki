@@ -1,0 +1,9 @@
+node_modules
+dist
+src-tauri/target
+.git
+.venv
+__pycache__
+*.pyc
+.DS_Store
+backend/.pytest_cache

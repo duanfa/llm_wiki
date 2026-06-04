@@ -13,9 +13,9 @@
  *     `{ [id]: { id, path, name, lastOpened } }`
  */
 
-import { load } from "@tauri-apps/plugin-store"
 import { readFile, writeFile } from "@/commands/fs"
 import { normalizePath } from "@/lib/path-utils"
+import { isWebRuntime } from "@/lib/web-api"
 
 const STORE_NAME = "app-state.json"
 const REGISTRY_KEY = "projectRegistry"
@@ -70,6 +70,18 @@ export async function ensureProjectId(projectPath: string): Promise<string> {
 // ── Global registry (Tauri plugin-store) ──────────────────────────────────
 
 async function getStore() {
+  if (isWebRuntime()) {
+    return {
+      async get<T>(key: string): Promise<T | undefined> {
+        const raw = localStorage.getItem(`llm-wiki:${key}`)
+        return raw === null ? undefined : JSON.parse(raw) as T
+      },
+      async set<T>(key: string, value: T): Promise<void> {
+        localStorage.setItem(`llm-wiki:${key}`, JSON.stringify(value))
+      },
+    }
+  }
+  const { load } = await import("@tauri-apps/plugin-store")
   return load(STORE_NAME, { autoSave: true, defaults: {} })
 }
 

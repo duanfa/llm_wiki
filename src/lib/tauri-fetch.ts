@@ -27,6 +27,7 @@ let pluginFetchPromise: Promise<typeof globalThis.fetch> | null = null
  * import rather than trying to .catch() an error that happens later.
  */
 const isNodeEnv = typeof window === "undefined"
+const isPlainWebEnv = typeof window !== "undefined" && !("__TAURI_INTERNALS__" in window)
 
 /**
  * Returns a fetch function that routes through Tauri's HTTP plugin in
@@ -40,7 +41,7 @@ const isNodeEnv = typeof window === "undefined"
  */
 export function getHttpFetch(): Promise<typeof globalThis.fetch> {
   if (!pluginFetchPromise) {
-    if (isNodeEnv) {
+    if (isNodeEnv || isPlainWebEnv) {
       // Bind so `this === globalThis` — Node's fetch requires it.
       pluginFetchPromise = Promise.resolve(globalThis.fetch.bind(globalThis))
     } else {

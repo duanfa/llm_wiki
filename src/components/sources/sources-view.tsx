@@ -1,5 +1,4 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from "react"
-import { open } from "@tauri-apps/plugin-dialog"
 import { Plus, FileText, RefreshCw, BookOpen, Trash2, Folder, ChevronRight, ChevronDown } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { ScrollArea } from "@/components/ui/scroll-area"
@@ -18,6 +17,7 @@ import {
   importSourceFiles,
   importSourceFolder,
 } from "@/lib/source-lifecycle"
+import { isWebRuntime, webApi } from "@/lib/web-api"
 
 const SOURCE_TREE_INITIAL_ROWS = 160
 const SOURCE_TREE_LOAD_BATCH = 160
@@ -37,6 +37,7 @@ export function SourcesView() {
   const [ingestingPath, setIngestingPath] = useState<string | null>(null)
   const [refreshing, setRefreshing] = useState(false)
   const [refreshError, setRefreshError] = useState<string | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   /**
    * Path of the source-tree node currently in "click again to
    * confirm delete" state. Lifted up here (rather than living
@@ -96,42 +97,48 @@ export function SourcesView() {
 
   async function handleImport() {
     if (!project) return
+    if (isWebRuntime()) {
+      fileInputRef.current?.click()
+      return
+    }
 
-    const selected = await open({
-      multiple: true,
-      title: t("sources.importSourceFiles"),
-      filters: [
-        {
-          name: "Documents",
-          extensions: [
-            "md", "mdx", "txt", "rtf", "pdf",
-            "html", "htm", "xml",
-            "doc", "docx", "xls", "xlsx", "ppt", "pptx",
-            "odt", "ods", "odp", "epub", "pages", "numbers", "key",
-          ],
-        },
-        {
-          name: "Data",
-          extensions: ["json", "jsonl", "csv", "tsv", "yaml", "yml", "ndjson"],
-        },
-        {
-          name: "Code",
-          extensions: [
-            "py", "js", "ts", "jsx", "tsx", "rs", "go", "java",
-            "c", "cpp", "h", "rb", "php", "swift", "sql", "sh",
-          ],
-        },
-        {
-          name: "Images",
-          extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "tiff", "avif", "heic"],
-        },
-        {
-          name: "Media",
-          extensions: ["mp4", "webm", "mov", "avi", "mkv", "mp3", "wav", "ogg", "flac", "m4a"],
-        },
-        { name: "All Files", extensions: ["*"] },
-      ],
-    })
+    const selected = await import("@tauri-apps/plugin-dialog").then(({ open }) =>
+      open({
+        multiple: true,
+        title: t("sources.importSourceFiles"),
+        filters: [
+          {
+            name: "Documents",
+            extensions: [
+              "md", "mdx", "txt", "rtf", "pdf",
+              "html", "htm", "xml",
+              "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+              "odt", "ods", "odp", "epub", "pages", "numbers", "key",
+            ],
+          },
+          {
+            name: "Data",
+            extensions: ["json", "jsonl", "csv", "tsv", "yaml", "yml", "ndjson"],
+          },
+          {
+            name: "Code",
+            extensions: [
+              "py", "js", "ts", "jsx", "tsx", "rs", "go", "java",
+              "c", "cpp", "h", "rb", "php", "swift", "sql", "sh",
+            ],
+          },
+          {
+            name: "Images",
+            extensions: ["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "tiff", "avif", "heic"],
+          },
+          {
+            name: "Media",
+            extensions: ["mp4", "webm", "mov", "avi", "mkv", "mp3", "wav", "ogg", "flac", "m4a"],
+          },
+          { name: "All Files", extensions: ["*"] },
+        ],
+      }),
+    )
 
     if (!selected || selected.length === 0) return
 
@@ -145,13 +152,35 @@ export function SourcesView() {
     }
   }
 
+  async function handleWebFileUpload(event: React.ChangeEvent<HTMLInputElement>) {
+    if (!project || !event.target.files || event.target.files.length === 0) return
+    setImporting(true)
+    try {
+      const form = new FormData()
+      for (const file of Array.from(event.target.files)) form.append("files", file)
+      const result = await webApi<{ paths: string[] }>(
+        `/api/v1/projects/${encodeURIComponent(project.id)}/sources/upload`,
+        { method: "POST", body: form },
+      )
+      await enqueueSourceIngest(project, result.paths, llmConfig)
+      await loadSources()
+    } finally {
+      event.target.value = ""
+      setImporting(false)
+    }
+  }
+
   async function handleImportFolder() {
     if (!project) return
 
-    const selected = await open({
-      directory: true,
-      title: t("sources.importSourceFolder"),
-    })
+    const selected = isWebRuntime()
+      ? window.prompt("输入服务端可访问的资料文件夹路径")
+      : await import("@tauri-apps/plugin-dialog").then(({ open }) =>
+          open({
+            directory: true,
+            title: t("sources.importSourceFolder"),
+          }),
+        )
 
     if (!selected || typeof selected !== "string") return
 
@@ -260,6 +289,13 @@ export function SourcesView() {
   return (
     <TooltipProvider delay={300}>
       <div className="flex h-full flex-col">
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={handleWebFileUpload}
+      />
       <div className="flex items-center justify-between border-b px-4 py-3">
         <h2 className="text-sm font-semibold">{t("sources.title")}</h2>
         <div className="flex gap-1">

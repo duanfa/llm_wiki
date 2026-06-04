@@ -1,14 +1,45 @@
-import { load } from "@tauri-apps/plugin-store"
 import type { WikiProject } from "@/types/wiki"
 import type { ApiConfig, LlmConfig, SearchApiConfig, EmbeddingConfig, MultimodalConfig, OutputLanguage, ProviderConfigs, ProxyConfig, ScheduledImportConfig, SourceWatchConfig } from "@/stores/wiki-store"
 import { normalizeSourceWatchConfig } from "@/lib/source-watch-config"
 import { normalizePath } from "@/lib/path-utils"
+import { isWebRuntime } from "@/lib/web-api"
 
 const STORE_NAME = "app-state.json"
 const RECENT_PROJECTS_KEY = "recentProjects"
 const LAST_PROJECT_KEY = "lastProject"
 
+interface KeyValueStore {
+  get<T>(key: string): Promise<T | undefined>
+  set<T>(key: string, value: T): Promise<void>
+  delete(key: string): Promise<void>
+  save(): Promise<void>
+}
+
+class WebLocalStorageStore implements KeyValueStore {
+  private prefix = "llm-wiki:"
+
+  async get<T>(key: string): Promise<T | undefined> {
+    const raw = localStorage.getItem(this.prefix + key)
+    if (raw === null) return undefined
+    return JSON.parse(raw) as T
+  }
+
+  async set<T>(key: string, value: T): Promise<void> {
+    localStorage.setItem(this.prefix + key, JSON.stringify(value))
+  }
+
+  async delete(key: string): Promise<void> {
+    localStorage.removeItem(this.prefix + key)
+  }
+
+  async save(): Promise<void> {}
+}
+
 async function getStore() {
+  if (isWebRuntime()) {
+    return new WebLocalStorageStore()
+  }
+  const { load } = await import("@tauri-apps/plugin-store")
   return load(STORE_NAME, { autoSave: true, defaults: {} })
 }
 

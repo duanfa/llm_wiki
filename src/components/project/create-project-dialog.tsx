@@ -1,6 +1,5 @@
 import { useState } from "react"
 import { useTranslation } from "react-i18next"
-import { open } from "@tauri-apps/plugin-dialog"
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog"
@@ -16,6 +15,7 @@ import { normalizePath } from "@/lib/path-utils"
 import { OUTPUT_LANGUAGE_OPTIONS } from "@/lib/output-language-options"
 import { useWikiStore, type OutputLanguage } from "@/stores/wiki-store"
 import { saveOutputLanguage } from "@/lib/project-store"
+import { isWebRuntime } from "@/lib/web-api"
 
 interface CreateProjectDialogProps {
   open: boolean
@@ -39,13 +39,17 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
   const setOutputLanguage = useWikiStore((s) => s.setOutputLanguage)
 
   async function handleBrowse() {
-    const selected = await open({
-      directory: true,
-      multiple: false,
-      title: t("project.browse"),
-    })
+    const selected = isWebRuntime()
+      ? window.prompt("输入服务端可创建项目的目录路径")
+      : await import("@tauri-apps/plugin-dialog").then(({ open }) =>
+          open({
+            directory: true,
+            multiple: false,
+            title: t("project.browse"),
+          }),
+        )
     if (selected) {
-      setPath(selected)
+      setPath(Array.isArray(selected) ? selected[0] : selected)
     }
   }
 

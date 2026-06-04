@@ -1,6 +1,6 @@
-import { invoke } from "@tauri-apps/api/core"
 import type { SourceWatchConfig } from "@/stores/wiki-store"
 import { normalizeSourceWatchConfig } from "@/lib/source-watch-config"
+import { isWebRuntime } from "@/lib/web-api"
 
 export type FileChangeKind = "created" | "modified" | "deleted"
 export type FileChangeStatus = "pending" | "processing" | "done" | "failed" | "superseded"
@@ -37,12 +37,22 @@ export interface FileSyncPayload {
   tasks: FileChangeTask[]
 }
 
+function emptyRescanResult(): FileChangeRescanResult {
+  return { queue: { version: 1, tasks: [] }, changedTasks: [] }
+}
+
+async function invokeTauri<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<T>(command, args)
+}
+
 export function startProjectFileWatcher(
   projectId: string,
   projectPath: string,
   sourceWatchConfig?: SourceWatchConfig,
 ): Promise<FileChangeRescanResult> {
-  return invoke<FileChangeRescanResult>("start_project_file_watcher", {
+  if (isWebRuntime()) return Promise.resolve(emptyRescanResult())
+  return invokeTauri<FileChangeRescanResult>("start_project_file_watcher", {
     projectId,
     projectPath,
     sourceWatchConfig: normalizeSourceWatchConfig(sourceWatchConfig),
@@ -50,7 +60,8 @@ export function startProjectFileWatcher(
 }
 
 export function stopProjectFileWatcher(): Promise<void> {
-  return invoke<void>("stop_project_file_watcher")
+  if (isWebRuntime()) return Promise.resolve()
+  return invokeTauri<void>("stop_project_file_watcher")
 }
 
 export function rescanProjectFiles(
@@ -58,7 +69,8 @@ export function rescanProjectFiles(
   projectPath: string,
   sourceWatchConfig?: SourceWatchConfig,
 ): Promise<FileChangeRescanResult> {
-  return invoke<FileChangeRescanResult>("rescan_project_files", {
+  if (isWebRuntime()) return Promise.resolve(emptyRescanResult())
+  return invokeTauri<FileChangeRescanResult>("rescan_project_files", {
     projectId,
     projectPath,
     sourceWatchConfig: normalizeSourceWatchConfig(sourceWatchConfig),
@@ -66,7 +78,8 @@ export function rescanProjectFiles(
 }
 
 export function getFileChangeQueue(projectPath: string): Promise<FileChangeQueue> {
-  return invoke<FileChangeQueue>("get_file_change_queue", { projectPath })
+  if (isWebRuntime()) return Promise.resolve(emptyRescanResult().queue)
+  return invokeTauri<FileChangeQueue>("get_file_change_queue", { projectPath })
 }
 
 export function retryFileChangeTask(
@@ -74,7 +87,8 @@ export function retryFileChangeTask(
   projectPath: string,
   taskId: string,
 ): Promise<FileChangeQueue> {
-  return invoke<FileChangeQueue>("retry_file_change_task", { projectId, projectPath, taskId })
+  if (isWebRuntime()) return Promise.resolve(emptyRescanResult().queue)
+  return invokeTauri<FileChangeQueue>("retry_file_change_task", { projectId, projectPath, taskId })
 }
 
 export function ignoreFileChangeTask(
@@ -82,5 +96,6 @@ export function ignoreFileChangeTask(
   projectPath: string,
   taskId: string,
 ): Promise<FileChangeQueue> {
-  return invoke<FileChangeQueue>("ignore_file_change_task", { projectId, projectPath, taskId })
+  if (isWebRuntime()) return Promise.resolve(emptyRescanResult().queue)
+  return invokeTauri<FileChangeQueue>("ignore_file_change_task", { projectId, projectPath, taskId })
 }

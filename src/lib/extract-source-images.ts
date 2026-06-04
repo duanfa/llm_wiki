@@ -13,9 +13,9 @@
  * captioning lands, the same helper grows a `caption` field per
  * image and the markdown line uses that instead.
  */
-import { invoke } from "@tauri-apps/api/core"
 import { copyFile, createDirectory, fileExists, readFileAsBase64 } from "@/commands/fs"
 import { getFileName, normalizePath } from "@/lib/path-utils"
+import { isWebRuntime } from "@/lib/web-api"
 
 /** Mirrors `commands::extract_images::SavedImage` on the Rust side. */
 export interface SavedImage {
@@ -52,6 +52,11 @@ const MARKDOWN_IMAGE_EXTS = new Set([
   "tiff",
   "svg",
 ])
+
+async function invokeTauri<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  const { invoke } = await import("@tauri-apps/api/core")
+  return invoke<T>(command, args)
+}
 
 function dirname(path: string): string {
   const idx = normalizePath(path).lastIndexOf("/")
@@ -162,13 +167,14 @@ export async function extractAndSaveSourceImages(
   const isPdf = (SUPPORTED_PDF_EXTS as readonly string[]).includes(ext)
   const isOffice = (SUPPORTED_OFFICE_EXTS as readonly string[]).includes(ext)
   if (!isPdf && !isOffice) return []
+  if (isWebRuntime()) return []
 
   const slug = slugOverride ?? fileName.replace(/\.[^.]+$/, "")
   const destDir = `${pp}/wiki/media/${slug}`
   const relTo = `${pp}/wiki`
 
   try {
-    const images = await invoke<unknown[]>(
+    const images = await invokeTauri<unknown[]>(
       isPdf ? "extract_and_save_pdf_images_cmd" : "extract_and_save_office_images_cmd",
       { sourcePath: sp, destDir, relTo },
     )

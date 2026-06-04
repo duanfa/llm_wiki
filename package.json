@@ -5,8 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:web": "VITE_LLM_WIKI_RUNTIME=web vite --host 0.0.0.0",
+    "backend": "python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000 --reload",
+    "serve:web": "LLM_WIKI_WEB_DIST=dist python -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000",
     "typecheck": "tsc --build --pretty",
     "build": "npm run typecheck && vite build",
+    "build:web": "VITE_LLM_WIKI_RUNTIME=web npm run build",
     "preview": "vite preview",
     "test": "npm run test:mocks && npm run test:llm",
     "test:mocks": "vitest run --exclude='**/*.real-llm.test.ts'",
