@@ -1,4 +1,5 @@
 import { create } from "zustand"
+import { publishActivitySnapshot } from "@/lib/activity-sync"
 
 export interface ActivityItem {
   id: string
@@ -20,7 +21,7 @@ interface ActivityState {
 
 let counter = 0
 
-export const useActivityStore = create<ActivityState>((set) => ({
+export const useActivityStore = create<ActivityState>((set, get) => ({
   items: [],
 
   addItem: (item) => {
@@ -31,25 +32,38 @@ export const useActivityStore = create<ActivityState>((set) => ({
         ...state.items,
       ],
     }))
+    publishActivitySnapshot(get().items, "add")
     return id
   },
 
   updateItem: (id, updates) =>
-    set((state) => ({
-      items: state.items.map((item) =>
-        item.id === id ? { ...item, ...updates } : item
-      ),
-    })),
+    set((state) => {
+      const next = {
+        items: state.items.map((item) =>
+          item.id === id ? { ...item, ...updates } : item
+        ),
+      }
+      queueMicrotask(() => publishActivitySnapshot(get().items, "update"))
+      return next
+    }),
 
   appendDetail: (id, text) =>
-    set((state) => ({
-      items: state.items.map((item) =>
-        item.id === id ? { ...item, detail: item.detail + text } : item
-      ),
-    })),
+    set((state) => {
+      const next = {
+        items: state.items.map((item) =>
+          item.id === id ? { ...item, detail: item.detail + text } : item
+        ),
+      }
+      queueMicrotask(() => publishActivitySnapshot(get().items, "update"))
+      return next
+    }),
 
   clearDone: () =>
-    set((state) => ({
-      items: state.items.filter((i) => i.status === "running"),
-    })),
+    set((state) => {
+      const next = {
+        items: state.items.filter((i) => i.status === "running"),
+      }
+      queueMicrotask(() => publishActivitySnapshot(get().items, "clear"))
+      return next
+    }),
 }))

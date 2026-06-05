@@ -14,6 +14,7 @@ import { WelcomeScreen } from "@/components/project/welcome-screen"
 import { CreateProjectDialog } from "@/components/project/create-project-dialog"
 import type { WikiProject } from "@/types/wiki"
 import { isWebRuntime } from "@/lib/web-api"
+import { loadServerModelConfig } from "@/lib/server-model-config"
 
 function App() {
   const project = useWikiStore((s) => s.project)
@@ -177,17 +178,27 @@ function App() {
   useEffect(() => {
     async function init() {
       try {
-        const savedConfig = await loadLlmConfig()
-        if (savedConfig) {
-          useWikiStore.getState().setLlmConfig(savedConfig)
+        const serverModelConfig = isWebRuntime() ? await loadServerModelConfig() : null
+        if (isWebRuntime() && serverModelConfig?.llmConfig) {
+          const config = {
+            ...useWikiStore.getState().llmConfig,
+            ...serverModelConfig.llmConfig,
+          }
+          useWikiStore.getState().setLlmConfig(config)
+        } else {
+          const savedConfig = await loadLlmConfig()
+          if (savedConfig) {
+            useWikiStore.getState().setLlmConfig(savedConfig)
+          }
         }
-        const savedProviderConfigs = await loadProviderConfigs()
-        if (savedProviderConfigs) {
-          useWikiStore.getState().setProviderConfigs(savedProviderConfigs)
-        }
-        const savedActivePreset = await loadActivePresetId()
-        if (savedActivePreset) {
-          useWikiStore.getState().setActivePresetId(savedActivePreset)
+        if (!isWebRuntime()) {
+          const savedProviderConfigs = await loadProviderConfigs()
+          if (savedProviderConfigs) {
+            useWikiStore.getState().setProviderConfigs(savedProviderConfigs)
+          }
+          const savedActivePreset = await loadActivePresetId()
+          if (savedActivePreset) {
+            useWikiStore.getState().setActivePresetId(savedActivePreset)
           // Re-resolve the active preset's LlmConfig from (preset defaults
           // + saved overrides). Without this, preset default updates
           // (e.g. a corrected Anthropic model ID shipped in a release)
@@ -195,16 +206,17 @@ function App() {
           // `llmConfig` snapshot from a previous launch would keep the
           // old value. Overrides still win, so an explicit user choice
           // is preserved.
-          const { LLM_PRESETS } = await import("@/components/settings/llm-presets")
-          const { resolveConfig } = await import("@/components/settings/preset-resolver")
-          const preset = LLM_PRESETS.find((p) => p.id === savedActivePreset)
-          if (preset) {
-            const currentFallback = useWikiStore.getState().llmConfig
-            const override = (savedProviderConfigs ?? {})[savedActivePreset]
-            const resolved = resolveConfig(preset, override, currentFallback)
-            useWikiStore.getState().setLlmConfig(resolved)
-            const { saveLlmConfig } = await import("@/lib/project-store")
-            await saveLlmConfig(resolved)
+            const { LLM_PRESETS } = await import("@/components/settings/llm-presets")
+            const { resolveConfig } = await import("@/components/settings/preset-resolver")
+            const preset = LLM_PRESETS.find((p) => p.id === savedActivePreset)
+            if (preset) {
+              const currentFallback = useWikiStore.getState().llmConfig
+              const override = (savedProviderConfigs ?? {})[savedActivePreset]
+              const resolved = resolveConfig(preset, override, currentFallback)
+              useWikiStore.getState().setLlmConfig(resolved)
+              const { saveLlmConfig } = await import("@/lib/project-store")
+              await saveLlmConfig(resolved)
+            }
           }
         }
         const savedSearchConfig = await loadSearchApiConfig()
@@ -212,11 +224,23 @@ function App() {
           useWikiStore.getState().setSearchApiConfig(savedSearchConfig)
         }
         const savedEmbeddingConfig = await loadEmbeddingConfig()
-        if (savedEmbeddingConfig) {
+        if (isWebRuntime() && serverModelConfig?.embeddingConfig) {
+          const config = {
+            ...useWikiStore.getState().embeddingConfig,
+            ...serverModelConfig.embeddingConfig,
+          }
+          useWikiStore.getState().setEmbeddingConfig(config)
+        } else if (!isWebRuntime() && savedEmbeddingConfig) {
           useWikiStore.getState().setEmbeddingConfig(savedEmbeddingConfig)
         }
         const savedMultimodalConfig = await loadMultimodalConfig()
-        if (savedMultimodalConfig) {
+        if (isWebRuntime() && serverModelConfig?.multimodalConfig) {
+          const config = {
+            ...useWikiStore.getState().multimodalConfig,
+            ...serverModelConfig.multimodalConfig,
+          }
+          useWikiStore.getState().setMultimodalConfig(config)
+        } else if (!isWebRuntime() && savedMultimodalConfig) {
           useWikiStore.getState().setMultimodalConfig(savedMultimodalConfig)
         }
         const savedProxy = await loadProxyConfig()

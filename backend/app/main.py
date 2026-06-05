@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import io
@@ -17,7 +18,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -36,6 +37,12 @@ ALLOW_ABSOLUTE_PATHS = os.getenv("LLM_WIKI_ALLOW_ABSOLUTE_PATHS", "0") == "1"
 API_TOKEN = os.getenv("LLM_WIKI_API_TOKEN", "").strip()
 WEB_DIST = Path(os.getenv("LLM_WIKI_WEB_DIST", "")).expanduser() if os.getenv("LLM_WIKI_WEB_DIST") else None
 REGISTRY_PATH = DATA_ROOT / ".server" / "projects.json"
+MODEL_CONFIG_PATH = Path(
+    os.getenv(
+        "LLM_WIKI_MODEL_CONFIG",
+        Path(__file__).resolve().parents[2] / "config" / "model_config.yaml",
+    )
+).expanduser().resolve()
 
 app = FastAPI(title="LLM Wiki Web API", version=APP_VERSION)
 app.add_middleware(
@@ -86,6 +93,7 @@ class ExtractImagesRequest(BaseModel):
 class ProjectRequest(BaseModel):
     name: str | None = None
     path: str
+    projectId: str | None = None
 
 
 class SearchRequest(BaseModel):
@@ -102,10 +110,44 @@ class IngestRequest(BaseModel):
     embeddingConfig: dict[str, Any] | None = None
 
 
+class ModelDefaults(BaseModel):
+    llmConfig: dict[str, Any] | None = None
+    multimodalConfig: dict[str, Any] | None = None
+    embeddingConfig: dict[str, Any] | None = None
+
+
+class ActivitySnapshotRequest(BaseModel):
+    items: list[dict[str, Any]] = Field(default_factory=list)
+    event: str = "snapshot"
+
+
+ACTIVITY_SUBSCRIBERS: dict[str, set[asyncio.Queue[str]]] = {}
+
+
 def dump_model(model: BaseModel, **kwargs: Any) -> dict[str, Any]:
     if hasattr(model, "model_dump"):
         return model.model_dump(**kwargs)  # type: ignore[attr-defined]
     return model.dict(**kwargs)
+
+
+def read_model_defaults() -> ModelDefaults:
+    if not MODEL_CONFIG_PATH.exists():
+        return ModelDefaults()
+    try:
+        import yaml
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail="PyYAML is required to read model_config.yaml") from exc
+    try:
+        raw = yaml.safe_load(MODEL_CONFIG_PATH.read_text(encoding="utf-8")) or {}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read model config: {exc}") from exc
+    if not isinstance(raw, dict):
+        raise HTTPException(status_code=500, detail="model_config.yaml must contain a mapping")
+    return ModelDefaults(
+        llmConfig=raw.get("llmConfig"),
+        multimodalConfig=raw.get("multimodalConfig"),
+        embeddingConfig=raw.get("embeddingConfig"),
+    )
 
 
 def require_auth(authorization: str | None = Header(None), x_llm_wiki_token: str | None = Header(None)) -> None:
@@ -161,26 +203,87 @@ def write_registry(projects: list[ProjectEntry]) -> None:
     )
 
 
-def ensure_project_identity(project_path: Path, name: str | None = None) -> WikiProject:
+def activity_path(project_path: Path) -> Path:
+    return project_path / ".llm-wiki" / "activity.json"
+
+
+def read_activity(project_path: Path) -> list[dict[str, Any]]:
+    path = activity_path(project_path)
+    if not path.exists():
+        return []
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(raw, list):
+            return [item for item in raw if isinstance(item, dict)]
+    except Exception:
+        return []
+    return []
+
+
+def write_activity(project_path: Path, items: list[dict[str, Any]]) -> None:
+    path = activity_path(project_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(items[:100], ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def sse_payload(event: str, data: dict[str, Any]) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+async def publish_activity(project_id: str, payload: dict[str, Any]) -> None:
+    message = sse_payload("activity", payload)
+    for queue in list(ACTIVITY_SUBSCRIBERS.get(project_id, set())):
+        try:
+            queue.put_nowait(message)
+        except asyncio.QueueFull:
+            pass
+
+
+def validate_project_id(project_id: str) -> str:
+    candidate = project_id.strip()
+    if not candidate:
+        raise HTTPException(status_code=400, detail="projectId is required")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}", candidate):
+        raise HTTPException(
+            status_code=400,
+            detail="projectId must use only letters, numbers, dot, underscore, or hyphen, and start with a letter or number",
+        )
+    if candidate in {".", ".."} or "/" in candidate or "\\" in candidate:
+        raise HTTPException(status_code=400, detail="projectId must be a single path segment")
+    return candidate
+
+
+def server_project_path(project_id: str) -> Path:
+    safe_id = validate_project_id(project_id)
+    path = (DATA_ROOT / safe_id).resolve()
+    try:
+        path.relative_to(DATA_ROOT)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="project path is outside LLM_WIKI_DATA_ROOT") from exc
+    return path
+
+
+def ensure_project_identity(project_path: Path, name: str | None = None, project_id: str | None = None) -> WikiProject:
     meta_path = project_meta_path(project_path)
     if meta_path.exists():
         try:
             raw = json.loads(meta_path.read_text(encoding="utf-8"))
-            project_id = str(raw.get("id") or uuid.uuid4())
+            existing_project_id = str(raw.get("id") or uuid.uuid4())
             project_name = str(raw.get("name") or name or project_path.name)
         except Exception:
-            project_id = str(uuid.uuid4())
+            existing_project_id = str(uuid.uuid4())
             project_name = name or project_path.name
     else:
-        project_id = str(uuid.uuid4())
+        existing_project_id = str(uuid.uuid4())
         project_name = name or project_path.name
 
+    resolved_project_id = validate_project_id(project_id) if project_id else existing_project_id
     meta_path.parent.mkdir(parents=True, exist_ok=True)
     meta_path.write_text(
-        json.dumps({"id": project_id, "name": project_name}, ensure_ascii=False, indent=2),
+        json.dumps({"id": resolved_project_id, "name": project_name}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    return WikiProject(id=project_id, name=project_name, path=project_path.as_posix())
+    return WikiProject(id=resolved_project_id, name=project_name, path=project_path.as_posix())
 
 
 def upsert_project(project: WikiProject, current: bool = True) -> WikiProject:
@@ -618,6 +721,17 @@ def health() -> dict[str, Any]:
         "authRequired": bool(API_TOKEN),
         "enabled": True,
         "backend": "fastapi",
+        "dataRoot": DATA_ROOT.as_posix(),
+    }
+
+
+@app.get(f"{API_PREFIX}/config/model", dependencies=[Depends(require_auth)])
+def model_config() -> dict[str, Any]:
+    defaults = read_model_defaults()
+    return {
+        "ok": True,
+        "path": MODEL_CONFIG_PATH.as_posix(),
+        **dump_model(defaults, exclude_none=True),
     }
 
 
@@ -629,9 +743,15 @@ def projects() -> dict[str, Any]:
 
 @app.post(f"{API_PREFIX}/projects/create", dependencies=[Depends(require_auth)])
 def create_project(request: ProjectRequest) -> WikiProject:
-    project_path = normalize_path(request.path)
-    create_project_structure(project_path)
-    return upsert_project(ensure_project_identity(project_path, request.name), current=True)
+    project_id = request.projectId or request.path
+    project_path = server_project_path(project_id)
+    if project_path.exists():
+        if not project_path.is_dir():
+            raise HTTPException(status_code=409, detail=f"Project path exists and is not a directory: {project_path}")
+        create_project_structure(project_path)
+    else:
+        create_project_structure(project_path)
+    return upsert_project(ensure_project_identity(project_path, request.name, project_id), current=True)
 
 
 @app.post(f"{API_PREFIX}/projects/open", dependencies=[Depends(require_auth)])
@@ -647,6 +767,62 @@ def project_files(project_id: str, root: str = "wiki") -> dict[str, Any]:
     project = find_project(project_id)
     base = normalize_path(project.path) / root
     return {"ok": True, "root": base.as_posix(), "files": list_directory_tree(base)}
+
+
+@app.get(f"{API_PREFIX}/projects/{{project_id}}/activity", dependencies=[Depends(require_auth)])
+def get_activity(project_id: str) -> dict[str, Any]:
+    project = find_project(project_id)
+    return {
+        "ok": True,
+        "projectId": project_id,
+        "items": read_activity(normalize_path(project.path)),
+    }
+
+
+@app.post(f"{API_PREFIX}/projects/{{project_id}}/activity", dependencies=[Depends(require_auth)])
+async def update_activity(project_id: str, request: ActivitySnapshotRequest) -> dict[str, Any]:
+    project = find_project(project_id)
+    items = request.items[:100]
+    write_activity(normalize_path(project.path), items)
+    await publish_activity(project_id, {
+        "projectId": project_id,
+        "event": request.event,
+        "items": items,
+        "updatedAt": int(time.time() * 1000),
+    })
+    return {"ok": True, "projectId": project_id, "count": len(items)}
+
+
+@app.get(f"{API_PREFIX}/projects/{{project_id}}/activity/stream", dependencies=[Depends(require_auth)])
+async def stream_activity(project_id: str, request: Request) -> StreamingResponse:
+    project = find_project(project_id)
+    project_path = normalize_path(project.path)
+    queue: asyncio.Queue[str] = asyncio.Queue(maxsize=100)
+    subscribers = ACTIVITY_SUBSCRIBERS.setdefault(project_id, set())
+    subscribers.add(queue)
+
+    async def events():
+        try:
+            yield sse_payload("activity", {
+                "projectId": project_id,
+                "event": "snapshot",
+                "items": read_activity(project_path),
+                "updatedAt": int(time.time() * 1000),
+            })
+            while True:
+                if await request.is_disconnected():
+                    break
+                try:
+                    message = await asyncio.wait_for(queue.get(), timeout=15)
+                    yield message
+                except asyncio.TimeoutError:
+                    yield sse_payload("ping", {"ts": int(time.time() * 1000)})
+        finally:
+            subscribers.discard(queue)
+            if not subscribers:
+                ACTIVITY_SUBSCRIBERS.pop(project_id, None)
+
+    return StreamingResponse(events(), media_type="text/event-stream")
 
 
 @app.get(f"{API_PREFIX}/projects/{{project_id}}/files/content", dependencies=[Depends(require_auth)])

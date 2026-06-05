@@ -114,7 +114,11 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
     setCreating(true)
     setError("")
     try {
-      const project = await createProject(name.trim(), path.trim())
+      const project = await createProject(
+        name.trim(),
+        path.trim(),
+        webRuntime ? path.trim() : undefined,
+      )
       const pp = normalizePath(project.path)
 
       const template = getTemplate(selectedTemplate)
@@ -194,19 +198,26 @@ export function CreateProjectDialog({ open: isOpen, onOpenChange, onCreated }: C
             </p>
           </div>
           <div className="flex flex-col gap-2">
-            <Label htmlFor="path">{webRuntime ? t("project.serverProjectDir") : t("project.parentDir")}</Label>
+            <Label htmlFor="path">{webRuntime ? t("project.projectId") : t("project.parentDir")}</Label>
             <div className="flex gap-2">
               <Input
                 id="path"
                 value={path}
                 onChange={(e) => setPath(e.target.value)}
-                placeholder={webRuntime ? t("project.serverProjectDirPlaceholder") : t("project.parentDirPlaceholder")}
+                placeholder={webRuntime ? t("project.projectIdPlaceholder") : t("project.parentDirPlaceholder")}
                 className="flex-1"
               />
-              <Button variant="outline" size="icon" onClick={handleBrowse} type="button">
-                <FolderOpen className="h-4 w-4" />
-              </Button>
+              {!webRuntime && (
+                <Button variant="outline" size="icon" onClick={handleBrowse} type="button">
+                  <FolderOpen className="h-4 w-4" />
+                </Button>
+              )}
             </div>
+            {webRuntime && (
+              <p className="text-xs text-muted-foreground">
+                {t("project.projectIdHint")}
+              </p>
+            )}
           </div>
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>

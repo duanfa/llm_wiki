@@ -1,0 +1,37 @@
+# Default model configuration for the Web runtime.
+# The frontend loads this from GET /api/v1/config/model when the browser
+# has no saved localStorage model settings yet.
+
+llmConfig:
+  # Providers: openai, anthropic, google, azure, ollama, custom, minimax
+  provider: custom
+  apiKey: "sk-b2c5f64593b245cbb5da8860faba06e3"
+  model: "qwen3.7-max"
+  # For OpenAI-compatible gateways, use the versioned base URL, not the
+  # final /chat/completions path. Examples:
+  #   http://localhost:1234/v1
+  #   http://localhost:11434/v1
+  customEndpoint: "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  ollamaUrl: "http://localhost:11434"
+  maxContextSize: 128000
+  apiMode: chat_completions
+  reasoning:
+    mode: "off"
+
+multimodalConfig:
+  enabled: true
+  useMainLlm: true
+  provider: custom
+  apiKey: ""
+  model: ""
+  customEndpoint: ""
+  ollamaUrl: "http://localhost:11434"
+  azureApiVersion: "2024-10-21"
+  apiMode: chat_completions
+  concurrency: 4
+
+embeddingConfig:
+  enabled: false
+  endpoint: ""
+  apiKey: ""
+  model: ""

@@ -4,6 +4,7 @@ import { isWebRuntime, jsonBody, webApi } from "@/lib/web-api"
 
 /** Raw shape returned by the Rust commands — id is attached client-side. */
 interface RawProject {
+  id?: string
   name: string
   path: string
 }
@@ -192,14 +193,15 @@ export async function readFileAsBase64(path: string): Promise<FileBase64> {
 export async function createProject(
   name: string,
   path: string,
+  projectId?: string,
 ): Promise<WikiProject> {
   const raw = isWebRuntime()
     ? await webApi<RawProject>("/api/v1/projects/create", {
         method: "POST",
-        body: jsonBody({ name, path }),
+        body: jsonBody({ name, path, projectId }),
       })
     : await invokeTauri<RawProject>("create_project", { name, path })
-  const id = await ensureProjectId(raw.path)
+  const id = raw.id ?? await ensureProjectId(raw.path)
   await upsertProjectInfo(id, raw.path, raw.name)
   return { id, name: raw.name, path: raw.path }
 }

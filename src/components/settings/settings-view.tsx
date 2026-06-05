@@ -153,6 +153,80 @@ function initialDraft(
   }
 }
 
+function ReadOnlyRow({ label, value }: { label: string; value: unknown }) {
+  const display = value === undefined || value === null || value === "" ? "-" : String(value)
+  return (
+    <div className="grid gap-1 rounded-md border bg-muted/20 p-3 sm:grid-cols-[160px_1fr]">
+      <div className="text-xs font-medium text-muted-foreground">{label}</div>
+      <div className="break-all font-mono text-xs">{display}</div>
+    </div>
+  )
+}
+
+function ServerModelConfigReadOnlySection({
+  kind,
+  draft,
+}: {
+  kind: "llm" | "embedding" | "multimodal"
+  draft: SettingsDraft
+}) {
+  const { t } = useTranslation()
+  const title =
+    kind === "llm"
+      ? t("settings.sections.llm.title")
+      : kind === "embedding"
+        ? t("settings.sections.embedding.title")
+        : t("settings.sections.multimodal.title", "Image captioning")
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="text-xl font-semibold">{title}</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {t(
+            "settings.serverModelConfigReadOnly",
+            "Web model settings are read-only and loaded from server config/model_config.yaml.",
+          )}
+        </p>
+      </div>
+
+      {kind === "llm" && (
+        <div className="space-y-2">
+          <ReadOnlyRow label="provider" value={draft.provider} />
+          <ReadOnlyRow label="model" value={draft.model} />
+          <ReadOnlyRow label="customEndpoint" value={draft.customEndpoint} />
+          <ReadOnlyRow label="ollamaUrl" value={draft.ollamaUrl} />
+          <ReadOnlyRow label="apiMode" value={draft.apiMode} />
+          <ReadOnlyRow label="maxContextSize" value={draft.maxContextSize} />
+          <ReadOnlyRow label="reasoning.mode" value={draft.reasoning?.mode} />
+        </div>
+      )}
+
+      {kind === "embedding" && (
+        <div className="space-y-2">
+          <ReadOnlyRow label="enabled" value={draft.embeddingEnabled} />
+          <ReadOnlyRow label="endpoint" value={draft.embeddingEndpoint} />
+          <ReadOnlyRow label="model" value={draft.embeddingModel} />
+          <ReadOnlyRow label="outputDimensionality" value={draft.embeddingOutputDimensionality} />
+        </div>
+      )}
+
+      {kind === "multimodal" && (
+        <div className="space-y-2">
+          <ReadOnlyRow label="enabled" value={draft.multimodalEnabled} />
+          <ReadOnlyRow label="useMainLlm" value={draft.multimodalUseMainLlm} />
+          <ReadOnlyRow label="provider" value={draft.multimodalProvider} />
+          <ReadOnlyRow label="model" value={draft.multimodalModel || "(main LLM)"} />
+          <ReadOnlyRow label="customEndpoint" value={draft.multimodalCustomEndpoint} />
+          <ReadOnlyRow label="ollamaUrl" value={draft.multimodalOllamaUrl} />
+          <ReadOnlyRow label="apiMode" value={draft.multimodalApiMode} />
+          <ReadOnlyRow label="concurrency" value={draft.multimodalConcurrency} />
+        </div>
+      )}
+    </div>
+  )
+}
+
 export function SettingsView() {
   const { t } = useTranslation()
   const project = useWikiStore((s) => s.project)
@@ -183,6 +257,7 @@ export function SettingsView() {
   // preference so the more aggressive interruption only fires once
   // per version.
   const updateAvailable = useUpdateStore((s) => hasAvailableUpdate(s))
+  const webRuntime = isWebRuntime()
 
   const [active, setActive] = useState<CategoryId>("llm")
   const [saved, setSaved] = useState(false)
@@ -321,12 +396,14 @@ export function SettingsView() {
       bypassLocal: draft.proxyBypassLocal,
     }
 
-    setLlmConfig(newLlm)
-    await saveLlmConfig(newLlm)
-    setEmbeddingConfig(newEmbed)
-    await saveEmbeddingConfig(newEmbed)
-    setMultimodalConfig(newMultimodal)
-    await saveMultimodalConfig(newMultimodal)
+    if (!isWebRuntime()) {
+      setLlmConfig(newLlm)
+      await saveLlmConfig(newLlm)
+      setEmbeddingConfig(newEmbed)
+      await saveEmbeddingConfig(newEmbed)
+      setMultimodalConfig(newMultimodal)
+      await saveMultimodalConfig(newMultimodal)
+    }
     setOutputLanguage(draft.outputLanguage as typeof outputLanguage)
     await saveOutputLanguage(draft.outputLanguage as typeof outputLanguage, project?.id)
     setProxyConfig(newProxy)
@@ -419,13 +496,16 @@ export function SettingsView() {
   const body = useMemo(() => {
     switch (active) {
       case "llm":
+        if (webRuntime) return <ServerModelConfigReadOnlySection kind="llm" draft={draft} />
         // The LLM section manages its own store state (per-provider
         // configs + active preset) and persists directly — it bypasses
         // the shared draft / global Save button.
         return <LlmProviderSection />
       case "embedding":
+        if (webRuntime) return <ServerModelConfigReadOnlySection kind="embedding" draft={draft} />
         return <EmbeddingSection draft={draft} setDraft={setDraft} />
       case "multimodal":
+        if (webRuntime) return <ServerModelConfigReadOnlySection kind="multimodal" draft={draft} />
         return <MultimodalSection draft={draft} setDraft={setDraft} />
       case "web-search":
         return <WebSearchSection />
@@ -448,7 +528,7 @@ export function SettingsView() {
       case "about":
         return <AboutSection />
     }
-  }, [active, draft, setDraft])
+  }, [active, draft, setDraft, webRuntime])
 
   return (
     <div className="flex h-full overflow-hidden">
@@ -510,7 +590,7 @@ export function SettingsView() {
         {/* Global Save bar hidden for sections that persist inline:
             - "llm" saves per-row on every edit (independent per-preset state)
             - "about" has no draft-bound fields */}
-        {active !== "about" && active !== "llm" && (
+        {active !== "about" && active !== "llm" && !(webRuntime && (active === "embedding" || active === "multimodal")) && (
           <div className="shrink-0 border-t bg-background/80 backdrop-blur px-8 py-3">
             <div className="mx-auto flex max-w-2xl items-center justify-between gap-4">
               <p className="text-xs text-muted-foreground">

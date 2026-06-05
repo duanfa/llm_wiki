@@ -41,7 +41,7 @@ docker run --rm -p 8000:8000 \
 
 ## Environment
 
-- `LLM_WIKI_DATA_ROOT`: root directory for server-managed projects. Defaults to `~/llm-wiki-data`.
+- `LLM_WIKI_DATA_ROOT`: root directory for server-managed projects. Defaults to `~/llm-wiki-data`. New Web projects are created at `${LLM_WIKI_DATA_ROOT}/${projectId}`.
 - `LLM_WIKI_ALLOW_ABSOLUTE_PATHS=1`: lets the backend access existing absolute paths during migration.
 - `LLM_WIKI_API_TOKEN`: enables Bearer-token auth for API requests.
 - `LLM_WIKI_CORS_ORIGINS`: comma-separated allowed origins. Defaults to `*`.
@@ -49,6 +49,11 @@ docker run --rm -p 8000:8000 \
 - `VITE_LLM_WIKI_API_TOKEN`: development-only frontend token injection.
 - `LLM_WIKI_LLM_ENDPOINT`, `LLM_WIKI_LLM_API_KEY`, `LLM_WIKI_LLM_MODEL`: optional server-side fallback LLM config for two-stage ingest.
 - `LLM_WIKI_EMBEDDING_API_KEY`: optional server-side fallback embedding key.
+- `LLM_WIKI_MODEL_CONFIG`: optional path to the Web default model YAML. Defaults to `config/model_config.yaml`.
+
+## Default Model Config
+
+Web startup loads `GET /api/v1/config/model` from `config/model_config.yaml` and uses it as the only source for LLM, multimodal captioning, and embedding model settings. The Web settings UI shows these model settings as read-only; edit the YAML file and restart/reload the Web app to change them.
 
 ## Current API Surface
 
