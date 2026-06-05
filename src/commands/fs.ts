@@ -198,7 +198,7 @@ export async function createProject(
   const raw = isWebRuntime()
     ? await webApi<RawProject>("/api/v1/projects/create", {
         method: "POST",
-        body: jsonBody({ name, path, projectId }),
+        body: jsonBody({ name, projectId }),
       })
     : await invokeTauri<RawProject>("create_project", { name, path })
   const id = raw.id ?? await ensureProjectId(raw.path)

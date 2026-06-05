@@ -92,7 +92,7 @@ class ExtractImagesRequest(BaseModel):
 
 class ProjectRequest(BaseModel):
     name: str | None = None
-    path: str
+    path: str | None = None
     projectId: str | None = None
 
 
@@ -203,6 +203,18 @@ def write_registry(projects: list[ProjectEntry]) -> None:
     )
 
 
+def find_registered_project_by_path(project_path: Path) -> ProjectEntry | None:
+    resolved = project_path.resolve().as_posix()
+    for project in read_registry():
+        try:
+            if Path(project.path).expanduser().resolve().as_posix() == resolved:
+                return project
+        except Exception:
+            if project.path == resolved:
+                return project
+    return None
+
+
 def activity_path(project_path: Path) -> Path:
     return project_path / ".llm-wiki" / "activity.json"
 
@@ -265,17 +277,18 @@ def server_project_path(project_id: str) -> Path:
 
 def ensure_project_identity(project_path: Path, name: str | None = None, project_id: str | None = None) -> WikiProject:
     meta_path = project_meta_path(project_path)
+    registered_project = find_registered_project_by_path(project_path)
     if meta_path.exists():
         try:
             raw = json.loads(meta_path.read_text(encoding="utf-8"))
-            existing_project_id = str(raw.get("id") or uuid.uuid4())
-            project_name = str(raw.get("name") or name or project_path.name)
+            existing_project_id = str(raw.get("id") or (registered_project.id if registered_project else uuid.uuid4()))
+            project_name = str(name or raw.get("name") or (registered_project.name if registered_project else project_path.name))
         except Exception:
-            existing_project_id = str(uuid.uuid4())
-            project_name = name or project_path.name
+            existing_project_id = registered_project.id if registered_project else str(uuid.uuid4())
+            project_name = name or (registered_project.name if registered_project else project_path.name)
     else:
-        existing_project_id = str(uuid.uuid4())
-        project_name = name or project_path.name
+        existing_project_id = registered_project.id if registered_project else str(uuid.uuid4())
+        project_name = name or (registered_project.name if registered_project else project_path.name)
 
     resolved_project_id = validate_project_id(project_id) if project_id else existing_project_id
     meta_path.parent.mkdir(parents=True, exist_ok=True)
@@ -598,7 +611,7 @@ def write_text_file(path: Path, contents: str, atomic: bool = False) -> None:
 
 def find_project(project_id: str) -> ProjectEntry:
     for project in read_registry():
-        if project.id == project_id or project.path == project_id:
+        if project.id == project_id or project.path == project_id or project.name == project_id:
             return project
     raise HTTPException(status_code=404, detail="Project not found")
 
@@ -743,7 +756,7 @@ def projects() -> dict[str, Any]:
 
 @app.post(f"{API_PREFIX}/projects/create", dependencies=[Depends(require_auth)])
 def create_project(request: ProjectRequest) -> WikiProject:
-    project_id = request.projectId or request.path
+    project_id = request.projectId or str(uuid.uuid4())
     project_path = server_project_path(project_id)
     if project_path.exists():
         if not project_path.is_dir():
@@ -751,15 +764,19 @@ def create_project(request: ProjectRequest) -> WikiProject:
         create_project_structure(project_path)
     else:
         create_project_structure(project_path)
-    return upsert_project(ensure_project_identity(project_path, request.name, project_id), current=True)
+    return upsert_project(ensure_project_identity(project_path, request.name or project_id, project_id), current=True)
 
 
 @app.post(f"{API_PREFIX}/projects/open", dependencies=[Depends(require_auth)])
 def open_project(request: ProjectRequest) -> WikiProject:
+    if not request.path:
+        raise HTTPException(status_code=400, detail="path is required")
     project_path = normalize_path(request.path)
     if not project_path.exists():
         raise HTTPException(status_code=404, detail="Project path does not exist")
-    return upsert_project(ensure_project_identity(project_path, request.name), current=True)
+    registered_project = find_registered_project_by_path(project_path)
+    project_id = request.projectId or (registered_project.id if registered_project else None)
+    return upsert_project(ensure_project_identity(project_path, request.name, project_id), current=True)
 
 
 @app.get(f"{API_PREFIX}/projects/{{project_id}}/files", dependencies=[Depends(require_auth)])
@@ -868,10 +885,13 @@ async def upload_sources(project_id: str, files: list[UploadFile]) -> dict[str, 
 
 
 @app.post(f"{API_PREFIX}/projects/{{project_id}}/ingest", dependencies=[Depends(require_auth)])
-def ingest(project_id: str, request: IngestRequest) -> dict[str, Any]:
+async def ingest(project_id: str, request: IngestRequest) -> dict[str, Any]:
     project = find_project(project_id)
     project_path = normalize_path(project.path)
     source_root = project_path / "raw" / "sources"
+    defaults = read_model_defaults()
+    llm_config = request.llmConfig or defaults.llmConfig
+    embedding_config = request.embeddingConfig or defaults.embeddingConfig
     paths: list[Path] = []
     for raw_path in request.paths:
         candidate = normalize_path(raw_path)
@@ -881,9 +901,55 @@ def ingest(project_id: str, request: IngestRequest) -> dict[str, Any]:
             raise HTTPException(status_code=403, detail="ingest paths must live under raw/sources") from exc
         if candidate.is_file():
             paths.append(candidate)
-    results = ingest_sources(project_path, paths, request.llmConfig, request.embeddingConfig)
+    first_title = paths[0].name if paths else "Ingest"
+    activity_id = f"activity-{int(time.time() * 1000)}"
+    activity_item = {
+        "id": activity_id,
+        "type": "ingest",
+        "title": first_title,
+        "status": "running",
+        "detail": "Reading source...",
+        "filesWritten": [],
+        "createdAt": int(time.time() * 1000),
+    }
+    loop = asyncio.get_running_loop()
+
+    def update_progress(status: str, detail: str, files_written: list[str] | None) -> None:
+        activity_item.update({
+            "status": status,
+            "detail": detail,
+        })
+        if files_written is not None:
+            activity_item["filesWritten"] = files_written
+        items = [activity_item]
+        write_activity(project_path, items)
+        payload = {
+                "projectId": project.id,
+                "event": "update",
+                "items": items,
+                "updatedAt": int(time.time() * 1000),
+            }
+        loop.call_soon_threadsafe(lambda: asyncio.create_task(publish_activity(project.id, payload)))
+        if project_id != project.id:
+            loop.call_soon_threadsafe(lambda: asyncio.create_task(publish_activity(project_id, payload)))
+
+    update_progress("running", "Reading source...", [])
+    results = await asyncio.to_thread(
+        ingest_sources,
+        project_path,
+        paths,
+        llm_config,
+        embedding_config,
+        update_progress,
+    )
     return {
         "ok": True,
+        "llmConfigUsed": {
+            "provider": (llm_config or {}).get("provider"),
+            "model": (llm_config or {}).get("model"),
+            "customEndpoint": (llm_config or {}).get("customEndpoint"),
+            "source": "request" if request.llmConfig else "model_config.yaml",
+        },
         "results": [
             {
                 "sourcePath": result.source_path,
@@ -893,6 +959,8 @@ def ingest(project_id: str, request: IngestRequest) -> dict[str, Any]:
                 "sha256": result.digest,
                 "error": result.error,
                 "generatedFiles": result.generated_files or [],
+                "cacheHit": result.cache_hit,
+                "reviewItems": result.review_items or [],
             }
             for result in results
         ],
