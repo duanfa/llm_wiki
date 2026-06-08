@@ -5,7 +5,7 @@
 llmConfig:
   # Providers: openai, anthropic, google, azure, ollama, custom, minimax
   provider: custom
-  apiKey: "sk-b2c5f64593b245cbb5da8860faba06e3"
+  apiKey: "sk-xxxxxxxxxxxxxxxx"
   model: "qwen3.7-max"
   # For OpenAI-compatible gateways, use the versioned base URL, not the
   # final /chat/completions path. Examples:
